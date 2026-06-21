@@ -359,7 +359,7 @@ class InMemoryAvatarStore:
                 baseline_amount=db_baseline_amount,
             )
 
-        session = AuthSession(user_id=db_user_id, email=db_email, session_token=uuid4().hex)
+        session = AuthSession(user_id=db_user_id, nickname=db_nickname, email=db_email, session_token=uuid4().hex)
         self._sessions[session.session_token] = session
         self._persist_snapshot()
         return session

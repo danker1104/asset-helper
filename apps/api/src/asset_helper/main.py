@@ -52,6 +52,7 @@ class LoginCreate(BaseModel):
 
 class LoginRead(BaseModel):
     user_id: str
+    nickname: str
     email: str
     session_token: str
 
@@ -425,7 +426,7 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                 ) from exc
             raise
 
-        return LoginRead(user_id=session.user_id, email=session.email, session_token=session.session_token)
+        return LoginRead(user_id=session.user_id, nickname=session.nickname, email=session.email, session_token=session.session_token)
 
     @app.post("/openbanking/connect", response_model=OpenBankingConnectRead)
     def connect_openbanking(payload: OpenBankingConnectCreate) -> OpenBankingConnectRead:

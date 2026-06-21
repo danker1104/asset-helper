@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class AuthSession:
     user_id: str
+    nickname: str
     email: str
     session_token: str
 

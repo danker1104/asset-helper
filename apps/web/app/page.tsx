@@ -525,6 +525,7 @@ export default function HomePage() {
       setSignupMessage("회원가입이 완료되었습니다.");
       setLoginUserId(normalizedUserId);
       setLoginPassword(normalizedPassword);
+      setLoginMessage("");
       setAuthView("login");
     } catch {
       setSignupMessage("회원가입 중 오류가 발생했습니다.");
@@ -740,7 +741,10 @@ export default function HomePage() {
             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
               <button
                 type="button"
-                onClick={() => setAuthView("signup")}
+                onClick={() => {
+                  setAuthView("signup");
+                  setLoginMessage("");
+                }}
                 style={{
                   border: authView === "signup" ? "none" : "1px solid #fdba74",
                   borderRadius: 999,
@@ -756,7 +760,10 @@ export default function HomePage() {
               </button>
               <button
                 type="button"
-                onClick={() => setAuthView("login")}
+                onClick={() => {
+                  setAuthView("login");
+                  setSignupMessage("");
+                }}
                 style={{
                   border: authView === "login" ? "none" : "1px solid #fdba74",
                   borderRadius: 999,
