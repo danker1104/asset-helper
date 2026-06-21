@@ -1,0 +1,24 @@
+name: asset-helper
+metadata:
+  template: asset-helper-docker@0.0.1
+
+infra:
+  provider: bicep
+  path: infra
+
+services:
+  api:
+    project: apps/api
+    host: containerapp
+    language: python
+    docker:
+      path: Dockerfile
+      context: .
+
+  web:
+    project: apps/web
+    host: containerapp
+    language: js
+    docker:
+      path: Dockerfile
+      context: .

@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vscode
+.venv
+.pytest_cache
+**/__pycache__
+**/*.pyc
+
+apps/web/.next
+apps/web/test-results
+apps/web/playwright-report
+
+node_modules
