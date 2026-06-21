@@ -175,7 +175,11 @@ function calculateHp(amount: number, baseline: number) {
 }
 
 export default function HomePage() {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+  const apiBaseUrl =
+    process.env.NEXT_PUBLIC_API_BASE_URL ??
+    (process.env.NODE_ENV === "development"
+      ? "http://127.0.0.1:8000"
+      : "https://ca-danker-e2-20260601-api.salmonforest-66a190e0.koreacentral.azurecontainerapps.io");
 
   const [email, setEmail] = useState("demo@example.com");
   const [avatarType, setAvatarType] = useState("plant");
