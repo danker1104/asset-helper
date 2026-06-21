@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .domain.models import MoneyEvent
 from .store import InMemoryAvatarStore
@@ -160,6 +160,86 @@ class OpenBankingRefreshRead(BaseModel):
     refreshed: bool
     reason: str | None
     connection: OpenBankingConnectRead
+
+
+class BankApiTransactionQueryCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    bank_code: str = Field(alias="bankCode", min_length=2, max_length=2)
+    account_number: str = Field(alias="accountNumber", min_length=1)
+    account_password: str = Field(alias="accountPassword", min_length=1)
+    resident_number: str = Field(alias="residentNumber", min_length=6, max_length=6)
+    start_date: str = Field(alias="startDate", min_length=8, max_length=8)
+    end_date: str = Field(alias="endDate", min_length=8, max_length=8)
+
+
+class BankApiTransactionRead(BaseModel):
+    date: str
+    time: str
+    description: str | None = ""
+    displayName: str | None = ""
+    counterparty: str | None = ""
+    amount: int
+    balance: int
+    type: str
+    branch: str | None = ""
+    memo: str | None = ""
+
+
+class BankApiAccountInfoRead(BaseModel):
+    accountNumber: str
+    balance: int
+
+
+class BankApiTransactionQueryRead(BaseModel):
+    success: bool
+    transactions: list[BankApiTransactionRead] = []
+    accountInfo: BankApiAccountInfoRead | None = None
+
+
+class BankApiAccountRegisterCreate(BaseModel):
+    user_id: str
+    bank_code: str = Field(min_length=2, max_length=2)
+    account_number: str = Field(min_length=1)
+    account_password: str = Field(min_length=1)
+    resident_number: str = Field(min_length=6, max_length=6)
+
+
+class BankApiLinkSummaryRead(BaseModel):
+    user_id: str
+    bank_code: str
+    account_number_masked: str
+    linked_at: str
+    last_polled_at: str | None = None
+
+
+class BankApiAccountRegisterRead(BaseModel):
+    success: bool
+    message: str | None = None
+    data: dict[str, object] | None = None
+    link: BankApiLinkSummaryRead
+
+
+class BankApiBalancePointRead(BaseModel):
+    balance: int
+    polled_at: str
+
+
+class BankApiPollRead(BaseModel):
+    user_id: str
+    current_balance: int
+    new_transaction_count: int
+    total_hp_drop: int
+    hp: int
+    polled_at: str
+
+
+class BankApiBalanceHistoryRead(BaseModel):
+    items: list[BankApiBalancePointRead]
+
+
+class BankApiTransactionHistoryRead(BaseModel):
+    items: list[BankApiTransactionRead]
 
 
 class ThresholdCreate(BaseModel):
@@ -581,6 +661,205 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                 ],
             ),
         )
+
+    @app.post("/openbanking/transactions", response_model=BankApiTransactionQueryRead)
+    def query_openbanking_transactions(payload: BankApiTransactionQueryCreate) -> BankApiTransactionQueryRead:
+        try:
+            result = app.state.store.fetch_bankapi_transactions(
+                bank_code=payload.bank_code,
+                account_number=payload.account_number,
+                account_password=payload.account_password,
+                resident_number=payload.resident_number,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+            )
+        except ValueError as exc:
+            if str(exc) == "bankapi_credentials_missing":
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": "bankapi_credentials_missing",
+                        "message": "Set BANKAPI_API_KEY and BANKAPI_SECRET_KEY environment variables",
+                    },
+                ) from exc
+            if str(exc).startswith("bankapi_http_"):
+                _, tail = str(exc).split("bankapi_http_", maxsplit=1)
+                status_code_str, _, upstream_message = tail.partition(":")
+                status_code = int(status_code_str) if status_code_str.isdigit() else 502
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_upstream_error",
+                        "message": upstream_message or "bankapi request failed",
+                        "upstream_status": status_code,
+                    },
+                ) from exc
+            if str(exc) == "bankapi_request_failed":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_request_failed",
+                        "message": "Failed to reach Bank API upstream",
+                    },
+                ) from exc
+            if str(exc) == "bankapi_invalid_response":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_invalid_response",
+                        "message": "Bank API returned an invalid response",
+                    },
+                ) from exc
+            raise
+
+        return BankApiTransactionQueryRead(
+            success=bool(result.get("success")),
+            transactions=result.get("transactions") or [],
+            accountInfo=result.get("accountInfo"),
+        )
+
+    @app.post("/bankapi/accounts/register", response_model=BankApiAccountRegisterRead)
+    def register_bankapi_account(payload: BankApiAccountRegisterCreate) -> BankApiAccountRegisterRead:
+        try:
+            result = app.state.store.register_bankapi_link(
+                user_id=payload.user_id,
+                bank_code=payload.bank_code,
+                account_number=payload.account_number,
+                account_password=payload.account_password,
+                resident_number=payload.resident_number,
+            )
+            summary = app.state.store.get_bankapi_link_summary(payload.user_id)
+        except ValueError as exc:
+            if str(exc) == "user_not_found":
+                raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "user not found"}) from exc
+            if str(exc) == "bankapi_credentials_missing":
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": "bankapi_credentials_missing",
+                        "message": "Set BANKAPI_API_KEY and BANKAPI_SECRET_KEY environment variables",
+                    },
+                ) from exc
+            if str(exc).startswith("bankapi_http_"):
+                _, tail = str(exc).split("bankapi_http_", maxsplit=1)
+                status_code_str, _, upstream_message = tail.partition(":")
+                status_code = int(status_code_str) if status_code_str.isdigit() else 502
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_upstream_error",
+                        "message": upstream_message or "bankapi request failed",
+                        "upstream_status": status_code,
+                    },
+                ) from exc
+            if str(exc) == "bankapi_request_failed":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_request_failed",
+                        "message": "Failed to reach Bank API upstream",
+                    },
+                ) from exc
+            if str(exc) == "bankapi_invalid_response":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_invalid_response",
+                        "message": "Bank API returned an invalid response",
+                    },
+                ) from exc
+            raise
+
+        if summary is None:
+            raise HTTPException(status_code=500, detail={"code": "bankapi_link_save_failed", "message": "bankapi link not saved"})
+
+        return BankApiAccountRegisterRead(
+            success=bool(result.get("success", True)),
+            message=(result.get("message") if isinstance(result, dict) else None),
+            data=(result.get("data") if isinstance(result, dict) else None),
+            link=BankApiLinkSummaryRead(**summary),
+        )
+
+    @app.get("/bankapi/accounts/me", response_model=BankApiLinkSummaryRead)
+    def get_bankapi_account_link(user_id: str) -> BankApiLinkSummaryRead:
+        summary = app.state.store.get_bankapi_link_summary(user_id)
+        if summary is None:
+            raise HTTPException(status_code=404, detail={"code": "bankapi_link_not_found", "message": "bankapi link not found"})
+        return BankApiLinkSummaryRead(**summary)
+
+    @app.post("/bankapi/poll", response_model=BankApiPollRead)
+    def poll_bankapi_account(user_id: str) -> BankApiPollRead:
+        try:
+            result = app.state.store.poll_bankapi_linked_account(user_id)
+        except ValueError as exc:
+            if str(exc) == "user_not_found":
+                raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "user not found"}) from exc
+            if str(exc) == "bankapi_link_not_found":
+                raise HTTPException(status_code=404, detail={"code": "bankapi_link_not_found", "message": "bankapi link not found"}) from exc
+            if str(exc) == "bankapi_credentials_missing":
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": "bankapi_credentials_missing",
+                        "message": "Set BANKAPI_API_KEY and BANKAPI_SECRET_KEY environment variables",
+                    },
+                ) from exc
+            if str(exc).startswith("bankapi_http_"):
+                _, tail = str(exc).split("bankapi_http_", maxsplit=1)
+                status_code_str, _, upstream_message = tail.partition(":")
+                status_code = int(status_code_str) if status_code_str.isdigit() else 502
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_upstream_error",
+                        "message": upstream_message or "bankapi request failed",
+                        "upstream_status": status_code,
+                    },
+                ) from exc
+            if str(exc) == "bankapi_request_failed":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_request_failed",
+                        "message": "Failed to reach Bank API upstream",
+                    },
+                ) from exc
+            if str(exc) == "bankapi_invalid_response":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_invalid_response",
+                        "message": "Bank API returned an invalid response",
+                    },
+                ) from exc
+            if str(exc) == "bankapi_upstream_unsuccessful":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": "bankapi_upstream_unsuccessful",
+                        "message": "Bank API returned success=false",
+                    },
+                ) from exc
+            raise
+
+        return BankApiPollRead(
+            user_id=str(result.get("user_id", user_id)),
+            current_balance=int(result.get("current_balance", 0)),
+            new_transaction_count=int(result.get("new_transaction_count", 0)),
+            total_hp_drop=int(result.get("total_hp_drop", 0)),
+            hp=int(result.get("hp", 100)),
+            polled_at=str(result.get("polled_at", "")),
+        )
+
+    @app.get("/bankapi/balance-history", response_model=BankApiBalanceHistoryRead)
+    def get_bankapi_balance_history(user_id: str, limit: int = 30) -> BankApiBalanceHistoryRead:
+        points = app.state.store.list_bankapi_balance_history(user_id, limit=limit)
+        return BankApiBalanceHistoryRead(items=[BankApiBalancePointRead(**point) for point in points])
+
+    @app.get("/bankapi/transactions", response_model=BankApiTransactionHistoryRead)
+    def get_bankapi_transaction_history(user_id: str, limit: int = 50) -> BankApiTransactionHistoryRead:
+        items = app.state.store.list_bankapi_transaction_history(user_id, limit=limit)
+        return BankApiTransactionHistoryRead(items=[BankApiTransactionRead(**item) for item in items if isinstance(item, dict)])
 
     @app.post("/auto-save/rules", response_model=AutoSaveRuleRead)
     def create_auto_save_rule(payload: AutoSaveRuleCreate) -> AutoSaveRuleRead:

@@ -3,8 +3,11 @@ from __future__ import annotations
 import os
 import pickle
 import sqlite3
+import json
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -83,6 +86,11 @@ class InMemoryAvatarStore:
         self._nickname_index: dict[str, str] = {}
         self._openbanking_connections: dict[str, OpenBankingConnection] = {}
         self._openbanking_poll_state: dict[str, OpenBankingPollState] = {}
+        self._bankapi_links: dict[str, dict[str, str]] = {}
+        self._bankapi_balance_history: dict[str, list[dict[str, object]]] = {}
+        self._bankapi_transaction_history: dict[str, list[dict[str, object]]] = {}
+        self._bankapi_seen_tx_keys: dict[str, set[str]] = {}
+        self._bankapi_last_polled_at: dict[str, str] = {}
         self._auto_save_rules: dict[str, AutoSaveRule] = {}
         self._auto_save_notifications: list[AutoSaveNotification] = []
         self._auto_save_logs: list[AutoSaveLog] = []
@@ -168,7 +176,8 @@ class InMemoryAvatarStore:
                 )
 
     def _snapshot_state(self) -> bytes:
-        state = {key: value for key, value in self.__dict__.items() if key not in {"_db_path", "_db_lock"}}
+        # Session tokens are ephemeral runtime data; exclude them from persistence.
+        state = {key: value for key, value in self.__dict__.items() if key not in {"_db_path", "_db_lock", "_sessions"}}
         return pickle.dumps(state)
 
     def _load_snapshot(self) -> None:
@@ -397,6 +406,254 @@ class InMemoryAvatarStore:
         self._openbanking_poll_state[user_id] = make_poll_state()
         self._persist_snapshot()
         return connection
+
+    def fetch_bankapi_transactions(
+        self,
+        *,
+        bank_code: str,
+        account_number: str,
+        account_password: str,
+        resident_number: str,
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, object]:
+        api_key = os.environ.get("BANKAPI_API_KEY")
+        secret_key = os.environ.get("BANKAPI_SECRET_KEY")
+        if not api_key or not secret_key:
+            raise ValueError("bankapi_credentials_missing")
+
+        base_url = os.environ.get("BANKAPI_BASE_URL", "https://api.bankapi.co.kr").rstrip("/")
+        payload = {
+            "bankCode": bank_code,
+            "accountNumber": account_number,
+            "accountPassword": account_password,
+            "residentNumber": resident_number,
+            "startDate": start_date,
+            "endDate": end_date,
+        }
+
+        body = json.dumps(payload).encode("utf-8")
+        req = urlrequest.Request(
+            f"{base_url}/v1/transactions",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}:{secret_key}",
+            },
+        )
+
+        try:
+            with urlrequest.urlopen(req, timeout=15) as response:
+                raw = response.read().decode("utf-8")
+        except urlerror.HTTPError as exc:
+            status_code = exc.code
+            try:
+                raw_error = exc.read().decode("utf-8")
+                parsed_error = json.loads(raw_error)
+                message = parsed_error.get("message") or parsed_error.get("error") or "bankapi_http_error"
+            except Exception:
+                message = "bankapi_http_error"
+            raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
+        except urlerror.URLError as exc:
+            raise ValueError("bankapi_request_failed") from exc
+
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("bankapi_invalid_response") from exc
+
+        if not isinstance(result, dict):
+            raise ValueError("bankapi_invalid_response")
+
+        return result
+
+    def register_bankapi_link(
+        self,
+        *,
+        user_id: str,
+        bank_code: str,
+        account_number: str,
+        account_password: str,
+        resident_number: str,
+    ) -> dict[str, object]:
+        profile = self._profiles.get(user_id)
+        if profile is None:
+            raise ValueError("user_not_found")
+
+        api_key = os.environ.get("BANKAPI_API_KEY")
+        secret_key = os.environ.get("BANKAPI_SECRET_KEY")
+        if not api_key or not secret_key:
+            raise ValueError("bankapi_credentials_missing")
+
+        base_url = os.environ.get("BANKAPI_BASE_URL", "https://api.bankapi.co.kr").rstrip("/")
+        payload = {"bankCode": bank_code, "accountNumber": account_number}
+        body = json.dumps(payload).encode("utf-8")
+        req = urlrequest.Request(
+            f"{base_url}/v1/accounts",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}:{secret_key}",
+            },
+        )
+
+        try:
+            with urlrequest.urlopen(req, timeout=15) as response:
+                raw = response.read().decode("utf-8")
+        except urlerror.HTTPError as exc:
+            status_code = exc.code
+            try:
+                raw_error = exc.read().decode("utf-8")
+                parsed_error = json.loads(raw_error)
+                message = parsed_error.get("message") or parsed_error.get("error") or "bankapi_http_error"
+            except Exception:
+                message = "bankapi_http_error"
+            raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
+        except urlerror.URLError as exc:
+            raise ValueError("bankapi_request_failed") from exc
+
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("bankapi_invalid_response") from exc
+
+        self._bankapi_links[user_id] = {
+            "bank_code": bank_code,
+            "account_number": account_number,
+            "account_password": account_password,
+            "resident_number": resident_number,
+            "linked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._persist_snapshot()
+        return result if isinstance(result, dict) else {"success": True}
+
+    def get_bankapi_link_summary(self, user_id: str) -> dict[str, object] | None:
+        link = self._bankapi_links.get(user_id)
+        if link is None:
+            return None
+        account_number = str(link.get("account_number", ""))
+        masked = account_number[-4:].rjust(len(account_number), "*") if account_number else ""
+        return {
+            "user_id": user_id,
+            "bank_code": link.get("bank_code", ""),
+            "account_number_masked": masked,
+            "linked_at": link.get("linked_at"),
+            "last_polled_at": self._bankapi_last_polled_at.get(user_id),
+        }
+
+    def poll_bankapi_linked_account(self, user_id: str, now: datetime | None = None) -> dict[str, object]:
+        profile = self._profiles.get(user_id)
+        if profile is None:
+            raise ValueError("user_not_found")
+
+        link = self._bankapi_links.get(user_id)
+        if link is None:
+            raise ValueError("bankapi_link_not_found")
+
+        current_time = now or datetime.now(timezone.utc)
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=timezone.utc)
+
+        start_date = (current_time - timedelta(days=7)).strftime("%Y%m%d")
+        end_date = current_time.strftime("%Y%m%d")
+        result = self.fetch_bankapi_transactions(
+            bank_code=str(link["bank_code"]),
+            account_number=str(link["account_number"]),
+            account_password=str(link["account_password"]),
+            resident_number=str(link["resident_number"]),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if not bool(result.get("success")):
+            raise ValueError("bankapi_upstream_unsuccessful")
+
+        transactions = result.get("transactions") or []
+        if not isinstance(transactions, list):
+            transactions = []
+
+        account_info = result.get("accountInfo") if isinstance(result.get("accountInfo"), dict) else {}
+        current_balance = int(account_info.get("balance", 0) or 0)
+
+        seen_keys = self._bankapi_seen_tx_keys.setdefault(user_id, set())
+        history = self._bankapi_transaction_history.setdefault(user_id, [])
+        new_transactions: list[dict[str, object]] = []
+        total_hp_drop = 0
+
+        avatar = self.get_avatar(user_id)
+
+        sorted_transactions = sorted(
+            [item for item in transactions if isinstance(item, dict)],
+            key=lambda tx: f"{tx.get('date', '')}T{tx.get('time', '')}",
+        )
+        for tx in sorted_transactions:
+            tx_key = "|".join(
+                [
+                    str(tx.get("date", "")),
+                    str(tx.get("time", "")),
+                    str(tx.get("type", "")),
+                    str(tx.get("amount", "")),
+                    str(tx.get("balance", "")),
+                    str(tx.get("description", "")),
+                    str(tx.get("counterparty", "")),
+                ]
+            )
+            if tx_key in seen_keys:
+                continue
+
+            seen_keys.add(tx_key)
+            new_transactions.append(tx)
+            history.append(tx)
+
+            tx_type = str(tx.get("type", ""))
+            if tx_type != "withdrawal":
+                continue
+
+            amount = int(tx.get("amount", 0) or 0)
+            balance_after = int(tx.get("balance", 0) or 0)
+            before_balance = max(1, balance_after + max(0, amount))
+            ratio = max(0.0, min(1.0, amount / before_balance))
+            hp_drop = max(1, round(ratio * 100))
+            avatar.hp = max(0, avatar.hp - hp_drop)
+            avatar.last_calculated_at = current_time
+            total_hp_drop += hp_drop
+
+        if len(history) > 500:
+            del history[:-500]
+
+        balance_history = self._bankapi_balance_history.setdefault(user_id, [])
+        balance_history.append(
+            {
+                "balance": current_balance,
+                "polled_at": current_time.isoformat(),
+            }
+        )
+        if len(balance_history) > 500:
+            del balance_history[:-500]
+
+        self._bankapi_last_polled_at[user_id] = current_time.isoformat()
+        self._avatars[user_id] = avatar
+        self._persist_snapshot()
+
+        return {
+            "user_id": user_id,
+            "current_balance": current_balance,
+            "new_transactions": new_transactions,
+            "new_transaction_count": len(new_transactions),
+            "total_hp_drop": total_hp_drop,
+            "hp": avatar.hp,
+            "polled_at": current_time.isoformat(),
+        }
+
+    def list_bankapi_balance_history(self, user_id: str, limit: int = 30) -> list[dict[str, object]]:
+        history = self._bankapi_balance_history.get(user_id, [])
+        return list(history[-max(1, limit):])
+
+    def list_bankapi_transaction_history(self, user_id: str, limit: int = 50) -> list[dict[str, object]]:
+        history = self._bankapi_transaction_history.get(user_id, [])
+        return list(history[-max(1, limit):])
 
     def get_openbanking_connection(self, user_id: str) -> OpenBankingConnection | None:
         return self._openbanking_connections.get(user_id)

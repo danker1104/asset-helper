@@ -2,6 +2,162 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+const responsiveStyles = `
+  * {
+    box-sizing: border-box;
+  }
+
+  :root {
+    color-scheme: light;
+    --bg: #eef4ff;
+    --surface: rgba(255, 255, 255, 0.78);
+    --surface-strong: rgba(255, 255, 255, 0.92);
+    --border: rgba(148, 163, 184, 0.18);
+    --text: #0f172a;
+    --muted: #64748b;
+    --primary: #2563eb;
+    --primary-strong: #1d4ed8;
+    --accent: #06b6d4;
+    --accent-soft: #e0f2fe;
+    --shadow: 0 24px 80px rgba(15, 23, 42, 0.10);
+  }
+  
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+  }
+  
+  main {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+
+  main::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(37, 99, 235, 0.14), transparent 28%),
+      radial-gradient(circle at 85% 12%, rgba(6, 182, 212, 0.14), transparent 24%),
+      radial-gradient(circle at 50% 88%, rgba(99, 102, 241, 0.10), transparent 30%);
+    z-index: 0;
+  }
+
+  main > * {
+    position: relative;
+    z-index: 1;
+  }
+  
+  section {
+    width: 100%;
+  }
+  
+  input, select, textarea {
+    font-size: 16px;
+    padding: clamp(8px, 2vw, 12px);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--text);
+  }
+  
+  button {
+    font-size: clamp(13px, 2.5vw, 14px);
+  }
+  
+  @media (max-width: 768px) {
+    main {
+      padding: 32px 16px 140px !important;
+    }
+    
+    h1 {
+      font-size: 28px !important;
+      line-height: 1.2 !important;
+      margin-bottom: 12px !important;
+    }
+    
+    h2 {
+      font-size: 20px !important;
+    }
+    
+    p {
+      font-size: 14px !important;
+    }
+    
+    section {
+      padding: 20px !important;
+      border-radius: 16px !important;
+    }
+    
+    label {
+      font-size: 13px !important;
+    }
+  }
+  
+  @media (max-width: 480px) {
+    main {
+      padding: 20px 12px 120px !important;
+    }
+    
+    h1 {
+      font-size: 22px !important;
+      line-height: 1.2 !important;
+    }
+    
+    h2 {
+      font-size: 16px !important;
+    }
+    
+    h3 {
+      font-size: 15px !important;
+    }
+    
+    p {
+      font-size: 13px !important;
+      line-height: 1.5 !important;
+    }
+    
+    section {
+      padding: 16px !important;
+      border-radius: 12px !important;
+      margin-bottom: 16px !important;
+    }
+    
+    button {
+      font-size: 13px !important;
+      padding: 8px 10px !important;
+      min-height: 40px !important;
+      border-radius: 6px !important;
+    }
+    
+    input, select, textarea {
+      font-size: 16px !important;
+      padding: 10px 8px !important;
+      width: 100% !important;
+      border-radius: 6px !important;
+    }
+    
+    label {
+      font-size: 12px !important;
+      display: block !important;
+      margin-bottom: 6px !important;
+    }
+    
+    nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      z-index: 999;
+    }
+  }
+`;
+
 type MenuTab = "주식" | "홈" | "미션" | "랭킹";
 
 type StockCompany = {
@@ -27,6 +183,41 @@ type MissionMyRank = {
   user_id: string;
   nickname: string;
   completed_count: number;
+};
+
+type BankApiLinkSummary = {
+  user_id: string;
+  bank_code: string;
+  account_number_masked: string;
+  linked_at: string;
+  last_polled_at: string | null;
+};
+
+type BankApiPollResult = {
+  user_id: string;
+  current_balance: number;
+  new_transaction_count: number;
+  total_hp_drop: number;
+  hp: number;
+  polled_at: string;
+};
+
+type BankApiBalancePoint = {
+  balance: number;
+  polled_at: string;
+};
+
+type BankApiTransaction = {
+  date: string;
+  time: string;
+  description?: string;
+  displayName?: string;
+  counterparty?: string;
+  amount: number;
+  balance: number;
+  type: string;
+  branch?: string;
+  memo?: string;
 };
 
 const menuTabs: MenuTab[] = ["주식", "홈", "미션", "랭킹"];
@@ -128,12 +319,6 @@ function estimateExecutionPrice(company: StockCompany, qty: number, side: "buy" 
   );
 }
 
-function calculateHp(amount: number, baseline: number) {
-  const safeBaseline = baseline > 0 ? baseline : 30000;
-  const impulseIndex = Math.max(0, Math.min(100, (amount / safeBaseline - 1) * 100));
-  return Math.max(0, Math.min(100, Math.round(100 - impulseIndex)));
-}
-
 export default function HomePage() {
   const apiBaseUrl =
     process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -146,7 +331,6 @@ export default function HomePage() {
   const [intensity, setIntensity] = useState("1");
   const [textMode, setTextMode] = useState(false);
   const [baseline, setBaseline] = useState("30000");
-  const [amount, setAmount] = useState("60000");
   const [hp, setHp] = useState(100);
   const [signupUserId, setSignupUserId] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
@@ -176,6 +360,39 @@ export default function HomePage() {
   const [missionRankingLoading, setMissionRankingLoading] = useState(false);
   const [myMissionRank, setMyMissionRank] = useState<MissionMyRank | null>(null);
   const [myMissionRankLoading, setMyMissionRankLoading] = useState(false);
+  const [bankCode, setBankCode] = useState("NH");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+  const [bankAccountPassword, setBankAccountPassword] = useState("");
+  const [bankResidentNumber, setBankResidentNumber] = useState("");
+  const [bankLink, setBankLink] = useState<BankApiLinkSummary | null>(null);
+  const [bankBalanceHistory, setBankBalanceHistory] = useState<BankApiBalancePoint[]>([]);
+  const [bankTransactionHistory, setBankTransactionHistory] = useState<BankApiTransaction[]>([]);
+  const [bankCurrentBalance, setBankCurrentBalance] = useState<number | null>(null);
+  const [bankStatusMessage, setBankStatusMessage] = useState("");
+  const [bankPolling, setBankPolling] = useState(false);
+  const [isBankPanelOpen, setIsBankPanelOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isAuthPanelOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsAuthPanelOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAuthPanelOpen]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -256,14 +473,14 @@ export default function HomePage() {
   const loadMissionRanking = async () => {
     setMissionRankingLoading(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/missions/ranking?limit=20`);
+      const response = await fetch(`${apiBaseUrl}/missions/ranking?limit=10`);
       const body = await response.json();
       if (!response.ok) {
         setMissionRanking([]);
         return;
       }
 
-      setMissionRanking(Array.isArray(body?.items) ? body.items : []);
+      setMissionRanking(Array.isArray(body?.items) ? body.items.slice(0, 10) : []);
     } catch {
       setMissionRanking([]);
     } finally {
@@ -294,6 +511,119 @@ export default function HomePage() {
     }
   };
 
+  const loadBankLink = async (userId: string) => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/bankapi/accounts/me?user_id=${encodeURIComponent(userId)}`);
+      if (!response.ok) {
+        setBankLink(null);
+        return;
+      }
+      const body = (await response.json()) as BankApiLinkSummary;
+      setBankLink(body);
+    } catch {
+      setBankLink(null);
+    }
+  };
+
+  const loadBankHistory = async (userId: string) => {
+    try {
+      const [balanceResponse, txResponse] = await Promise.all([
+        fetch(`${apiBaseUrl}/bankapi/balance-history?user_id=${encodeURIComponent(userId)}&limit=20`),
+        fetch(`${apiBaseUrl}/bankapi/transactions?user_id=${encodeURIComponent(userId)}&limit=20`),
+      ]);
+
+      if (balanceResponse.ok) {
+        const balanceBody = await balanceResponse.json();
+        setBankBalanceHistory(Array.isArray(balanceBody?.items) ? balanceBody.items : []);
+      }
+
+      if (txResponse.ok) {
+        const txBody = await txResponse.json();
+        const items = Array.isArray(txBody?.items) ? txBody.items : [];
+        setBankTransactionHistory(items);
+      }
+    } catch {
+      // ignore transient history load failures
+    }
+  };
+
+  const pollBankApi = async (userId: string) => {
+    setBankPolling(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/bankapi/poll?user_id=${encodeURIComponent(userId)}`, {
+        method: "POST",
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setBankStatusMessage(body?.error?.message || "실계좌 조회에 실패했습니다.");
+        return;
+      }
+
+      const pollResult = body as BankApiPollResult;
+      setBankCurrentBalance(pollResult.current_balance);
+      setHp(pollResult.hp);
+      setBankStatusMessage(
+        pollResult.new_transaction_count > 0
+          ? `신규 거래 ${pollResult.new_transaction_count}건 반영, HP ${pollResult.total_hp_drop} 감소`
+          : "신규 거래 없음",
+      );
+      await loadBankLink(userId);
+      await loadBankHistory(userId);
+    } catch {
+      setBankStatusMessage("실계좌 조회 중 오류가 발생했습니다.");
+    } finally {
+      setBankPolling(false);
+    }
+  };
+
+  const registerBankAccount = async () => {
+    if (!currentUserId) {
+      setBankStatusMessage("로그인 후 계좌를 등록해 주세요.");
+      return;
+    }
+
+    if (!bankAccountNumber.trim() || !bankAccountPassword.trim() || !bankResidentNumber.trim()) {
+      setBankStatusMessage("은행/계좌번호/계좌비밀번호/주민번호 앞 6자리를 입력해 주세요.");
+      return;
+    }
+
+    setBankStatusMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/bankapi/accounts/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: currentUserId,
+          bank_code: bankCode,
+          account_number: bankAccountNumber.trim(),
+          account_password: bankAccountPassword.trim(),
+          resident_number: bankResidentNumber.trim(),
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        let errorMessage = "계좌 등록에 실패했습니다.";
+        const detailMessage = body?.detail?.message || body?.message || "";
+        
+        // Bank API에서 계좌가 없다는 에러 체크
+        if (detailMessage.includes("존재") || detailMessage.includes("없") || detailMessage.includes("not found") || detailMessage.includes("invalid")) {
+          errorMessage = "존재하지 않습니다.";
+        } else if (detailMessage) {
+          errorMessage = detailMessage;
+        }
+        
+        setBankStatusMessage(errorMessage);
+        return;
+      }
+
+      setBankLink(body?.link || null);
+      setBankStatusMessage(body?.message || "계좌 등록이 완료되었습니다.");
+      await pollBankApi(currentUserId);
+    } catch {
+      setBankStatusMessage("계좌 등록 중 오류가 발생했습니다.");
+    }
+  };
+
   useEffect(() => {
     if (activeTab !== "랭킹" || !isLoggedIn) {
       setMyMissionRank(null);
@@ -303,6 +633,32 @@ export default function HomePage() {
     loadMissionRanking();
     loadMyMissionRank();
   }, [activeTab, currentUserId, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) {
+      setBankLink(null);
+      setBankBalanceHistory([]);
+      setBankTransactionHistory([]);
+      setBankCurrentBalance(null);
+      return;
+    }
+
+    loadBankLink(currentUserId);
+    loadBankHistory(currentUserId);
+  }, [currentUserId, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId || !bankLink) {
+      return;
+    }
+
+    pollBankApi(currentUserId);
+    const timer = setInterval(() => {
+      pollBankApi(currentUserId);
+    }, 60000);
+
+    return () => clearInterval(timer);
+  }, [bankLink?.account_number_masked, bankLink?.bank_code, currentUserId, isLoggedIn]);
 
   const completeMissionFromUi = async (missionId: string) => {
     if (missionDone[missionId]) {
@@ -441,10 +797,6 @@ export default function HomePage() {
     setTradeMessage(`${company.name} ${qty}주 매도 체결 (${formatKrw(executionPrice)} / 수수료 ${formatKrw(fee)})`);
   };
 
-  const onCalculate = () => {
-    setHp(calculateHp(Number(amount), Number(baseline)));
-  };
-
   const onSignup = async () => {
     setSignupMessage("");
     const normalizedUserId = signupUserId.trim();
@@ -529,50 +881,95 @@ export default function HomePage() {
     }
   };
 
+  const onLogout = () => {
+    setIsLoggedIn(false);
+    setCurrentUserId("");
+    setLoggedInNickname("");
+    setIsAuthPanelOpen(false);
+    setIsBankPanelOpen(false);
+    setBankLink(null);
+    setBankBalanceHistory([]);
+    setBankTransactionHistory([]);
+    setBankCurrentBalance(null);
+    setBankStatusMessage("");
+    setBankPolling(false);
+    setLoginMessage("");
+    setSignupMessage("");
+  };
+
   return (
-    <main
+    <>
+      <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
+      <main
       style={{
-        maxWidth: 960,
+        maxWidth: "100%",
         margin: "0 auto",
-        padding: "64px 24px 140px",
+        padding: "clamp(20px, 5vw, 64px) clamp(12px, 3vw, 24px) 140px",
       }}
     >
       {activeTab === "홈" ? (
       <section
         style={{
-          background: "rgba(255,255,255,0.78)",
-          border: "1px solid rgba(148,163,184,0.22)",
-          borderRadius: 24,
-          boxShadow: "0 24px 80px rgba(15,23,42,0.08)",
-          padding: 32,
+          background: "linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(240,248,255,0.86) 100%)",
+          border: "1px solid var(--border)",
+          borderRadius: "clamp(20px, 4vw, 28px)",
+          boxShadow: "var(--shadow)",
+          padding: "clamp(20px, 4vw, 32px)",
           backdropFilter: "blur(12px)",
         }}
       >
-        <p style={{ margin: 0, fontSize: 14, color: "#475569" }}>MVP 첫 슬라이스</p>
-        <h1 style={{ margin: "8px 0 12px", fontSize: 44, lineHeight: 1.1 }}>
-          내 소비가 키우는 또 하나의 나
+        <h1
+          style={{
+            margin: 0,
+            fontSize: "clamp(24px, 8vw, 44px)",
+            lineHeight: 1.1,
+            letterSpacing: "-0.05em",
+            background: "linear-gradient(135deg, #0f172a 0%, #2563eb 45%, #06b6d4 100%)",
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+            backgroundClip: "text",
+          }}
+        >
+          자산 도우미
         </h1>
-        <p style={{ margin: 0, maxWidth: 720, fontSize: 18, lineHeight: 1.6, color: "#334155" }}>
-          수동 결제 입력으로 분신 HP 변화를 바로 확인하는 화면입니다. 불필요한 기능은 빼고 핵심만 남겼습니다.
-        </p>
 
         {isLoggedIn ? (
-          <p
-            aria-label="logged-in-nickname"
-            style={{
-              margin: "18px 0 0",
-              display: "inline-flex",
-              alignItems: "center",
-              borderRadius: 999,
-              background: "#fee2e2",
-              color: "#991b1b",
-              padding: "10px 16px",
-              fontSize: 14,
-              fontWeight: 700,
-            }}
-          >
-            {loggedInNickname} 님
-          </p>
+          <div style={{ margin: "18px 0 0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%" }}>
+            <div
+              aria-label="logged-in-nickname"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                borderRadius: 999,
+                background: "linear-gradient(135deg, rgba(37,99,235,0.12), rgba(6,182,212,0.12))",
+                color: "#0f172a",
+                padding: "10px 16px",
+                fontSize: 14,
+                fontWeight: 700,
+                flex: "0 1 auto",
+              }}
+            >
+              {loggedInNickname} 님
+            </div>
+            <button
+              type="button"
+              aria-label="logout-button"
+              onClick={onLogout}
+              style={{
+                border: "none",
+                borderRadius: 999,
+                background: "linear-gradient(135deg, #2563eb 0%, #06b6d4 100%)",
+                color: "white",
+                padding: "10px 14px",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+                marginLeft: "auto",
+              }}
+            >
+              로그아웃
+            </button>
+          </div>
         ) : (
           <button
             type="button"
@@ -582,7 +979,7 @@ export default function HomePage() {
               marginTop: 18,
               border: "none",
               borderRadius: 999,
-              background: "#dc2626",
+              background: "linear-gradient(135deg, #2563eb 0%, #06b6d4 100%)",
               color: "white",
               padding: "10px 16px",
               fontSize: 14,
@@ -594,308 +991,416 @@ export default function HomePage() {
           </button>
         )}
 
-        <div
-          style={{
-            marginTop: 28,
-            padding: 20,
-            borderRadius: 20,
-            background: "#f8fafc",
-            border: "1px solid #e2e8f0",
-          }}
-        >
-          <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#0f172a" }}>온보딩</p>
+        {isLoggedIn ? (
           <div
             style={{
-              display: "grid",
-              gap: 16,
-              marginTop: 16,
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              marginTop: 28,
+              padding: 20,
+              borderRadius: 20,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
             }}
           >
-            {isLoggedIn ? null : (
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#0f172a" }}>온보딩</p>
+            <div
+              style={{
+                display: "grid",
+                gap: 16,
+                marginTop: 16,
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              }}
+            >
               <label style={{ display: "grid", gap: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>이메일</span>
-                <input
-                  aria-label="email-input"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                <span style={{ fontSize: 14, fontWeight: 600 }}>분신 타입</span>
+                <select
+                  aria-label="avatar-type-select"
+                  value={avatarType}
+                  onChange={(event) => setAvatarType(event.target.value)}
                   style={{
                     borderRadius: 14,
                     border: "1px solid #cbd5e1",
                     padding: "14px 16px",
                     fontSize: 16,
+                    background: "white",
                   }}
-                />
+                >
+                  <option value="plant">식물</option>
+                  <option value="character">캐릭터</option>
+                </select>
               </label>
-            )}
 
-            <label style={{ display: "grid", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>분신 타입</span>
-              <select
-                aria-label="avatar-type-select"
-                value={avatarType}
-                onChange={(event) => setAvatarType(event.target.value)}
-                style={{
-                  borderRadius: 14,
-                  border: "1px solid #cbd5e1",
-                  padding: "14px 16px",
-                  fontSize: 16,
-                  background: "white",
-                }}
-              >
-                <option value="plant">식물</option>
-                <option value="character">캐릭터</option>
-              </select>
-            </label>
-
-            <label style={{ display: "grid", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>시들기 강도</span>
-              <select
-                aria-label="intensity-select"
-                value={intensity}
-                onChange={(event) => setIntensity(event.target.value)}
-                style={{
-                  borderRadius: 14,
-                  border: "1px solid #cbd5e1",
-                  padding: "14px 16px",
-                  fontSize: 16,
-                  background: "white",
-                }}
-              >
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
-            </label>
-
-            {isLoggedIn ? null : (
-              <label style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 30 }}>
-                <input
-                  aria-label="text-mode-toggle"
-                  type="checkbox"
-                  checked={textMode}
-                  onChange={(event) => setTextMode(event.target.checked)}
-                />
-                <span style={{ fontSize: 14, fontWeight: 600 }}>텍스트 모드</span>
+              <label style={{ display: "grid", gap: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>시들기 강도</span>
+                <select
+                  aria-label="intensity-select"
+                  value={intensity}
+                  onChange={(event) => setIntensity(event.target.value)}
+                  style={{
+                    borderRadius: 14,
+                    border: "1px solid #cbd5e1",
+                    padding: "14px 16px",
+                    fontSize: 16,
+                    background: "white",
+                  }}
+                >
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                </select>
               </label>
-            )}
+            </div>
+
+            <div style={{ marginTop: 18, fontSize: 14, color: "#475569" }} data-testid="onboarding-summary">
+              {`${avatarType} · 강도 ${intensity}`}
+            </div>
+
           </div>
+        ) : null}
 
-          <div style={{ marginTop: 18, fontSize: 14, color: "#475569" }} data-testid="onboarding-summary">
-            {isLoggedIn ? `${avatarType} · 강도 ${intensity}` : `${email} · ${avatarType} · 강도 ${intensity} · ${textMode ? "텍스트 모드" : "메타포 모드"}`}
-          </div>
-
-        </div>
-
-        {isAuthPanelOpen ? (
+        {isLoggedIn ? (
           <div
             style={{
               marginTop: 24,
               padding: 20,
               borderRadius: 20,
-              background: "#fff7ed",
-              border: "1px solid #fed7aa",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.84) 0%, rgba(240,248,255,0.72) 100%)",
+              border: "1px solid var(--border)",
+              display: "grid",
+              gap: 14,
+              boxShadow: "0 18px 50px rgba(15, 23, 42, 0.06)",
             }}
           >
-            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#9a3412" }}>인증</p>
-            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthView("signup");
-                  setLoginMessage("");
-                }}
-                style={{
-                  border: authView === "signup" ? "none" : "1px solid #fdba74",
-                  borderRadius: 999,
-                  background: authView === "signup" ? "#9a3412" : "white",
-                  color: authView === "signup" ? "white" : "#9a3412",
-                  padding: "8px 14px",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                회원가입
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthView("login");
-                  setSignupMessage("");
-                }}
-                style={{
-                  border: authView === "login" ? "none" : "1px solid #fdba74",
-                  borderRadius: 999,
-                  background: authView === "login" ? "#9a3412" : "white",
-                  color: authView === "login" ? "white" : "#9a3412",
-                  padding: "8px 14px",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                로그인
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setIsBankPanelOpen((prev) => !prev)}
+              aria-label="bank-panel-toggle"
+              aria-expanded={isBankPanelOpen}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                width: "100%",
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "var(--text)" }}>실계좌 연동 및 실시간 조회(1분)</p>
+              <span style={{ fontSize: 18, fontWeight: 900, color: "var(--primary)", lineHeight: 1 }}>
+                {isBankPanelOpen ? "▴" : "▾"}
+              </span>
+            </button>
 
-            {authView === "signup" ? (
+            {isBankPanelOpen ? (
               <>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                    gap: 16,
-                    marginTop: 16,
-                  }}
-                >
-                  <label style={{ display: "grid", gap: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>회원가입 아이디</span>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>은행</span>
+                    <select
+                      onChange={(event) => setBankCode(event.target.value)}
+                      style={{ borderRadius: 10, border: "1px solid #cbd5e1", padding: "10px 12px", background: "white" }}
+                    >
+                      <option value="NH">NH</option>
+                      <option value="KB">KB</option>
+                      <option value="WR">WR</option>
+                    </select>
+                  </label>
+
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>계좌번호</span>
                     <input
-                      aria-label="signup-user-id"
-                      value={signupUserId}
-                      onChange={(event) => setSignupUserId(event.target.value)}
-                      style={{ borderRadius: 14, border: "1px solid #fdba74", padding: "14px 16px", fontSize: 16 }}
+                      value={bankAccountNumber}
+                      onChange={(event) => setBankAccountNumber(event.target.value)}
+                      style={{ borderRadius: 10, border: "1px solid #cbd5e1", padding: "10px 12px" }}
                     />
                   </label>
-                  <label style={{ display: "grid", gap: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>회원가입 비밀번호</span>
+
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>계좌 비밀번호</span>
                     <input
-                      aria-label="signup-password"
                       type="password"
-                      value={signupPassword}
-                      onChange={(event) => setSignupPassword(event.target.value)}
-                      style={{ borderRadius: 14, border: "1px solid #fdba74", padding: "14px 16px", fontSize: 16 }}
+                      value={bankAccountPassword}
+                      onChange={(event) => setBankAccountPassword(event.target.value)}
+                      style={{ borderRadius: 10, border: "1px solid #cbd5e1", padding: "10px 12px" }}
                     />
                   </label>
-                  <label style={{ display: "grid", gap: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>회원가입 닉네임</span>
+
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>주민번호 앞 6자리</span>
                     <input
-                      aria-label="signup-nickname"
-                      value={signupNickname}
-                      onChange={(event) => setSignupNickname(event.target.value)}
-                      style={{ borderRadius: 14, border: "1px solid #fdba74", padding: "14px 16px", fontSize: 16 }}
+                      value={bankResidentNumber}
+                      onChange={(event) => setBankResidentNumber(event.target.value)}
+                      maxLength={6}
+                      style={{ borderRadius: 10, border: "1px solid #cbd5e1", padding: "10px 12px" }}
                     />
                   </label>
                 </div>
 
-                <button
-                  type="button"
-                  aria-label="signup-submit"
-                  onClick={onSignup}
-                  style={{ marginTop: 16, border: "none", borderRadius: 999, background: "#9a3412", color: "white", padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: "pointer" }}
-                >
-                  회원가입
-                </button>
-
-                {signupMessage ? (
-                  <p data-testid="signup-message" style={{ margin: "10px 0 0", color: "#7c2d12", fontSize: 14 }}>
-                    {signupMessage}
-                  </p>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <div style={{ marginTop: 16, display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-                  <label style={{ display: "grid", gap: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>로그인 아이디</span>
-                    <input
-                      aria-label="login-user-id"
-                      value={loginUserId}
-                      onChange={(event) => setLoginUserId(event.target.value)}
-                      style={{ borderRadius: 14, border: "1px solid #fdba74", padding: "14px 16px", fontSize: 16 }}
-                    />
-                  </label>
-                  <label style={{ display: "grid", gap: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>로그인 비밀번호</span>
-                    <input
-                      aria-label="login-password"
-                      type="password"
-                      value={loginPassword}
-                      onChange={(event) => setLoginPassword(event.target.value)}
-                      style={{ borderRadius: 14, border: "1px solid #fdba74", padding: "14px 16px", fontSize: 16 }}
-                    />
-                  </label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={registerBankAccount}
+                    style={{ border: "none", borderRadius: 999, background: "#0f172a", color: "white", padding: "10px 16px", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    계좌 등록
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (currentUserId) {
+                        pollBankApi(currentUserId);
+                      }
+                    }}
+                    style={{ border: "1px solid #0f172a", borderRadius: 999, background: "white", color: "#0f172a", padding: "10px 16px", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    지금 조회
+                  </button>
+                  {bankPolling ? <span style={{ fontSize: 13, color: "#475569", alignSelf: "center" }}>조회 중...</span> : null}
                 </div>
 
-                <button
-                  type="button"
-                  aria-label="login-submit"
-                  onClick={onLogin}
-                  style={{ marginTop: 14, border: "1px solid #9a3412", borderRadius: 999, background: "white", color: "#9a3412", padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: "pointer" }}
-                >
-                  로그인
-                </button>
+                {bankLink ? (
+                  <div style={{ fontSize: 13, color: "#334155", lineHeight: 1.5 }}>
+                    연동 계좌: {bankLink.bank_code} {bankLink.account_number_masked} · 마지막 조회: {bankLink.last_polled_at || "없음"}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#64748b" }}>아직 연동된 계좌가 없습니다.</div>
+                )}
 
-                {loginMessage ? (
-                  <p data-testid="login-message" style={{ margin: "10px 0 0", color: "#7c2d12", fontSize: 14 }}>
-                    {loginMessage}
-                  </p>
+                {bankCurrentBalance !== null ? (
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>현재 잔액: {formatKrw(bankCurrentBalance)}</div>
                 ) : null}
+
+                {bankStatusMessage ? <div style={{ fontSize: 13, color: "#334155" }}>{bankStatusMessage}</div> : null}
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
+                  <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#f8fafc" }}>
+                    <strong style={{ fontSize: 13 }}>최근 잔액 기록</strong>
+                    <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                      {[...bankBalanceHistory].reverse().slice(0, 5).map((point) => (
+                        <div key={`${point.polled_at}-${point.balance}`} style={{ fontSize: 12, color: "#334155" }}>
+                          {point.polled_at} · {formatKrw(point.balance)}
+                        </div>
+                      ))}
+                      {bankBalanceHistory.length === 0 ? <div style={{ fontSize: 12, color: "#64748b" }}>기록 없음</div> : null}
+                    </div>
+                  </div>
+
+                  <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#f8fafc" }}>
+                    <strong style={{ fontSize: 13 }}>최근 거래내역</strong>
+                    <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                      {[...bankTransactionHistory].reverse().slice(0, 5).map((tx, index) => (
+                        <div key={`${tx.date}-${tx.time}-${tx.amount}-${index}`} style={{ fontSize: 12, color: "#334155" }}>
+                          {tx.date} {tx.time} · {tx.type === "withdrawal" ? "출금" : "입금"} {formatKrw(tx.amount)} · 잔액 {formatKrw(tx.balance)}
+                        </div>
+                      ))}
+                      {bankTransactionHistory.length === 0 ? <div style={{ fontSize: 12, color: "#64748b" }}>거래내역 없음</div> : null}
+                    </div>
+                  </div>
+                </div>
               </>
-            )}
+            ) : null}
           </div>
         ) : null}
 
-        {/* HP 계산 입력 */}
-        <div
-          style={{
-            display: "grid",
-            gap: 16,
-            marginTop: 20,
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-          }}
-        >
-          <label style={{ display: "grid", gap: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>평소 일평균 결제액</span>
-            <input
-              aria-label="baseline-input"
-              value={baseline}
-              onChange={(event) => setBaseline(event.target.value)}
-              inputMode="numeric"
+        {isAuthPanelOpen ? (
+          <div
+            role="presentation"
+            onClick={() => setIsAuthPanelOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "16px",
+              background: "linear-gradient(180deg, rgba(15,23,42,0.58) 0%, rgba(15,23,42,0.48) 100%)",
+              backdropFilter: "blur(12px)",
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="auth-modal"
+              onClick={(event) => event.stopPropagation()}
               style={{
-                borderRadius: 14,
-                border: "1px solid #cbd5e1",
-                padding: "14px 16px",
-                fontSize: 16,
+                width: "min(92vw, 760px)",
+                maxHeight: "calc(100vh - 32px)",
+                overflowY: "auto",
+                borderRadius: 24,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(238,247,255,0.96) 100%)",
+                border: "1px solid rgba(148,163,184,0.20)",
+                boxShadow: "0 32px 100px rgba(15,23,42,0.28)",
+                padding: 20,
               }}
-            />
-          </label>
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#9a3412" }}>인증</p>
+                  <h2 style={{ margin: "6px 0 0", fontSize: 24, color: "#431407" }}>
+                    {authView === "signup" ? "회원가입" : "로그인"}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  aria-label="auth-panel-close"
+                  onClick={() => setIsAuthPanelOpen(false)}
+                  style={{
+                    border: "1px solid #fdba74",
+                    borderRadius: 999,
+                    background: "white",
+                    color: "#1d4ed8",
+                    padding: "8px 14px",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  닫기
+                </button>
+              </div>
 
-          <label style={{ display: "grid", gap: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>이번 결제 금액</span>
-            <input
-              aria-label="amount-input"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-              inputMode="numeric"
-              style={{
-                borderRadius: 14,
-                border: "1px solid #cbd5e1",
-                padding: "14px 16px",
-                fontSize: 16,
-              }}
-            />
-          </label>
-        </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthView("signup");
+                    setLoginMessage("");
+                  }}
+                  style={{
+                      border: authView === "signup" ? "none" : "1px solid rgba(37,99,235,0.22)",
+                    borderRadius: 999,
+                      background: authView === "signup" ? "var(--primary)" : "white",
+                    color: authView === "signup" ? "white" : "#9a3412",
+                    padding: "8px 14px",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  회원가입
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthView("login");
+                    setSignupMessage("");
+                  }}
+                  style={{
+                      border: authView === "login" ? "none" : "1px solid rgba(37,99,235,0.22)",
+                    borderRadius: 999,
+                      background: authView === "login" ? "var(--primary)" : "white",
+                      color: authView === "login" ? "white" : "#1d4ed8",
+                    padding: "8px 14px",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  로그인
+                </button>
+              </div>
 
-        <button
-          type="button"
-          onClick={onCalculate}
-          style={{
-            marginTop: 20,
-            border: "none",
-            borderRadius: 999,
-            background: "#0f172a",
-            color: "white",
-            padding: "14px 20px",
-            fontSize: 16,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          HP 계산하기
-        </button>
+              {authView === "signup" ? (
+                <>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                      gap: 16,
+                      marginTop: 16,
+                    }}
+                  >
+                    <label style={{ display: "grid", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>회원가입 아이디</span>
+                      <input
+                        aria-label="signup-user-id"
+                        value={signupUserId}
+                        onChange={(event) => setSignupUserId(event.target.value)}
+                        style={{ borderRadius: 14, border: "1px solid rgba(148,163,184,0.30)", padding: "14px 16px", fontSize: 16 }}
+                      />
+                    </label>
+                    <label style={{ display: "grid", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>회원가입 비밀번호</span>
+                      <input
+                        aria-label="signup-password"
+                        type="password"
+                        value={signupPassword}
+                        onChange={(event) => setSignupPassword(event.target.value)}
+                        style={{ borderRadius: 14, border: "1px solid rgba(148,163,184,0.30)", padding: "14px 16px", fontSize: 16 }}
+                      />
+                    </label>
+                    <label style={{ display: "grid", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>회원가입 닉네임</span>
+                      <input
+                        aria-label="signup-nickname"
+                        value={signupNickname}
+                        onChange={(event) => setSignupNickname(event.target.value)}
+                        style={{ borderRadius: 14, border: "1px solid rgba(148,163,184,0.30)", padding: "14px 16px", fontSize: 16 }}
+                      />
+                    </label>
+                  </div>
+
+                  <button
+                    type="button"
+                    aria-label="signup-submit"
+                    onClick={onSignup}
+                    style={{ marginTop: 16, border: "none", borderRadius: 999, background: "linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%)", color: "white", padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 12px 26px rgba(37,99,235,0.22)" }}
+                  >
+                    회원가입
+                  </button>
+
+                  {signupMessage ? (
+                    <p data-testid="signup-message" style={{ margin: "10px 0 0", color: "#7c2d12", fontSize: 14 }}>
+                      {signupMessage}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <div style={{ marginTop: 16, display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                    <label style={{ display: "grid", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>로그인 아이디</span>
+                      <input
+                        aria-label="login-user-id"
+                        value={loginUserId}
+                        onChange={(event) => setLoginUserId(event.target.value)}
+                        style={{ borderRadius: 14, border: "1px solid rgba(148,163,184,0.30)", padding: "14px 16px", fontSize: 16 }}
+                      />
+                    </label>
+                    <label style={{ display: "grid", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>로그인 비밀번호</span>
+                      <input
+                        aria-label="login-password"
+                        type="password"
+                        value={loginPassword}
+                        onChange={(event) => setLoginPassword(event.target.value)}
+                        style={{ borderRadius: 14, border: "1px solid rgba(148,163,184,0.30)", padding: "14px 16px", fontSize: 16 }}
+                      />
+                    </label>
+                  </div>
+
+                  <button
+                    type="button"
+                    aria-label="login-submit"
+                    onClick={onLogin}
+                    style={{ marginTop: 14, border: "1px solid rgba(37,99,235,0.22)", borderRadius: 999, background: "white", color: "var(--primary-strong)", padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: "pointer" }}
+                  >
+                    로그인
+                  </button>
+
+                  {loginMessage ? (
+                    <p data-testid="login-message" style={{ margin: "10px 0 0", color: "#7c2d12", fontSize: 14 }}>
+                      {loginMessage}
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         <article
           style={{
@@ -1409,5 +1914,6 @@ export default function HomePage() {
         </ul>
       </nav>
     </main>
+    </>
   );
 }
