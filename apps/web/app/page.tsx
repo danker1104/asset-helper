@@ -632,6 +632,7 @@ export default function HomePage() {
         message?: string;
         detail?: { message?: string };
         error?: { message?: string; details?: unknown };
+        link?: BankApiLinkSummary;
       } | null;
 
       if (!response.ok) {
