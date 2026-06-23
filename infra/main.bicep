@@ -15,6 +15,30 @@ param bankApiKey string = ''
 @secure()
 param bankApiSecretKey string = ''
 
+var hasBankApiCredentials = !empty(bankApiKey) && !empty(bankApiSecretKey)
+
+var bankApiSecrets = hasBankApiCredentials ? [
+  {
+    name: 'bankapi-api-key'
+    value: bankApiKey
+  }
+  {
+    name: 'bankapi-secret-key'
+    value: bankApiSecretKey
+  }
+] : []
+
+var bankApiEnvVars = hasBankApiCredentials ? [
+  {
+    name: 'BANKAPI_API_KEY'
+    secretRef: 'bankapi-api-key'
+  }
+  {
+    name: 'BANKAPI_SECRET_KEY'
+    secretRef: 'bankapi-secret-key'
+  }
+] : []
+
 var suffix = uniqueString(subscription().id, resourceGroup().id, environmentName)
 var workspaceName = 'law-${environmentName}-${suffix}'
 var managedEnvironmentName = 'cae-${environmentName}'
@@ -76,20 +100,15 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
-      secrets: [
-        {
-          name: 'acr-password'
-          value: containerRegistry.listCredentials().passwords[0].value
-        }
-        {
-          name: 'bankapi-api-key'
-          value: bankApiKey
-        }
-        {
-          name: 'bankapi-secret-key'
-          value: bankApiSecretKey
-        }
-      ]
+      secrets: union(
+        [
+          {
+            name: 'acr-password'
+            value: containerRegistry.listCredentials().passwords[0].value
+          }
+        ],
+        bankApiSecrets
+      )
       registries: [
         {
           server: containerRegistry.properties.loginServer
@@ -108,16 +127,7 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'api'
           image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
-          env: [
-            {
-              name: 'BANKAPI_API_KEY'
-              secretRef: 'bankapi-api-key'
-            }
-            {
-              name: 'BANKAPI_SECRET_KEY'
-              secretRef: 'bankapi-secret-key'
-            }
-          ]
+          env: bankApiEnvVars
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
