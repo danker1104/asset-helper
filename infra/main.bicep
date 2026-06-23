@@ -23,6 +23,27 @@ var webContainerAppName = 'ca-${environmentName}-web'
 var normalizedEnvName = toLower(replace(environmentName, '-', ''))
 var acrBaseName = 'acr${normalizedEnvName}${suffix}'
 var acrName = length(acrBaseName) > 50 ? substring(acrBaseName, 0, 50) : acrBaseName
+var hasBankApiCredentials = !empty(bankApiKey) && !empty(bankApiSecretKey)
+var bankApiSecrets = hasBankApiCredentials ? [
+  {
+    name: 'bankapi-api-key'
+    value: bankApiKey
+  }
+  {
+    name: 'bankapi-secret-key'
+    value: bankApiSecretKey
+  }
+] : []
+var bankApiEnvVars = hasBankApiCredentials ? [
+  {
+    name: 'BANKAPI_API_KEY'
+    secretRef: 'bankapi-api-key'
+  }
+  {
+    name: 'BANKAPI_SECRET_KEY'
+    secretRef: 'bankapi-secret-key'
+  }
+] : []
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: workspaceName
@@ -76,20 +97,12 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
-      secrets: [
+      secrets: concat([
         {
           name: 'acr-password'
           value: containerRegistry.listCredentials().passwords[0].value
         }
-        {
-          name: 'bankapi-api-key'
-          value: bankApiKey
-        }
-        {
-          name: 'bankapi-secret-key'
-          value: bankApiSecretKey
-        }
-      ]
+      ], bankApiSecrets)
       registries: [
         {
           server: containerRegistry.properties.loginServer
@@ -108,16 +121,7 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'api'
           image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
-          env: [
-            {
-              name: 'BANKAPI_API_KEY'
-              secretRef: 'bankapi-api-key'
-            }
-            {
-              name: 'BANKAPI_SECRET_KEY'
-              secretRef: 'bankapi-secret-key'
-            }
-          ]
+          env: bankApiEnvVars
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
