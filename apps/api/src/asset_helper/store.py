@@ -579,7 +579,7 @@ class InMemoryAvatarStore:
                     "linked_at": datetime.now(timezone.utc).isoformat(),
                 }
                 self._persist_snapshot()
-                return {"success": False, "message": message}
+                return {"success": True, "message": "이미 등록된 계좌를 현재 계정에 연동했습니다."}
             
             raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
         except TimeoutError as exc:

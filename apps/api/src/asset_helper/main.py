@@ -690,6 +690,15 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                         "message": "Set BANKAPI_API_KEY and BANKAPI_SECRET_KEY environment variables",
                     },
                 ) from exc
+            if str(exc).startswith("bankapi_timeout:"):
+                _, _, timeout_message = str(exc).partition(":")
+                raise HTTPException(
+                    status_code=504,
+                    detail={
+                        "code": "bankapi_timeout",
+                        "message": timeout_message or "Bank API request timed out",
+                    },
+                ) from exc
             if str(exc).startswith("bankapi_http_"):
                 _, tail = str(exc).split("bankapi_http_", maxsplit=1)
                 status_code_str, _, upstream_message = tail.partition(":")
@@ -750,6 +759,15 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                     detail={
                         "code": "bankapi_credentials_missing",
                         "message": "Set BANKAPI_API_KEY and BANKAPI_SECRET_KEY environment variables",
+                    },
+                ) from exc
+            if str(exc).startswith("bankapi_timeout:"):
+                _, _, timeout_message = str(exc).partition(":")
+                raise HTTPException(
+                    status_code=504,
+                    detail={
+                        "code": "bankapi_timeout",
+                        "message": timeout_message or "Bank API request timed out",
                     },
                 ) from exc
             if str(exc).startswith("bankapi_http_"):
@@ -815,6 +833,15 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                     detail={
                         "code": "bankapi_credentials_missing",
                         "message": "Set BANKAPI_API_KEY and BANKAPI_SECRET_KEY environment variables",
+                    },
+                ) from exc
+            if str(exc).startswith("bankapi_timeout:"):
+                _, _, timeout_message = str(exc).partition(":")
+                raise HTTPException(
+                    status_code=504,
+                    detail={
+                        "code": "bankapi_timeout",
+                        "message": timeout_message or "Bank API request timed out",
                     },
                 ) from exc
             if str(exc).startswith("bankapi_http_"):
