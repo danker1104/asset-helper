@@ -7,6 +7,12 @@
     },
     "location": {
       "value": "${AZURE_LOCATION}"
+    },
+    "bankApiKey": {
+      "value": "${BANKAPI_API_KEY}"
+    },
+    "bankApiSecretKey": {
+      "value": "${BANKAPI_SECRET_KEY}"
     }
   }
 }

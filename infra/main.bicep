@@ -7,6 +7,14 @@ param location string = resourceGroup().location
 @description('Tags applied to provisioned resources.')
 param tags object = {}
 
+@description('Bank API public key.')
+@secure()
+param bankApiKey string = ''
+
+@description('Bank API secret key.')
+@secure()
+param bankApiSecretKey string = ''
+
 var suffix = uniqueString(subscription().id, resourceGroup().id, environmentName)
 var workspaceName = 'law-${environmentName}-${suffix}'
 var managedEnvironmentName = 'cae-${environmentName}'
@@ -73,6 +81,14 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'acr-password'
           value: containerRegistry.listCredentials().passwords[0].value
         }
+        {
+          name: 'bankapi-api-key'
+          value: bankApiKey
+        }
+        {
+          name: 'bankapi-secret-key'
+          value: bankApiSecretKey
+        }
       ]
       registries: [
         {
@@ -92,6 +108,16 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'api'
           image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          env: [
+            {
+              name: 'BANKAPI_API_KEY'
+              secretRef: 'bankapi-api-key'
+            }
+            {
+              name: 'BANKAPI_SECRET_KEY'
+              secretRef: 'bankapi-secret-key'
+            }
+          ]
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
