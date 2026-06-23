@@ -404,13 +404,20 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
     app = FastAPI(title="Asset Helper API", version="0.1.0")
     app.state.store = store or InMemoryAvatarStore()
     
-    # Add CORS middleware - allow all origins for now
+    # Add CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
+        allow_origins=[
+            "http://localhost:3000",
+            "http://localhost:3100",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3100",
+            "https://ca-danker-e2-20260601-web.salmonforest-66a190e0.koreacentral.azurecontainerapps.io",
+        ],
+        allow_origin_regex=r"https://.*\.azurecontainerapps\.io",
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["*"],
-        allow_credentials=False,
+        allow_credentials=True,
     )
 
     @app.exception_handler(RequestValidationError)
