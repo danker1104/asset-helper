@@ -392,6 +392,15 @@ export default function HomePage() {
   const [bankPolling, setBankPolling] = useState(false);
   const [isBankPanelOpen, setIsBankPanelOpen] = useState(false);
 
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const storedUserId = window.localStorage.getItem("asset-helper-last-user-id");
+    if (storedUserId && storedUserId.trim()) {
+      setCurrentUserId(storedUserId.trim());
+      setIsLoggedIn(true);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isAuthPanelOpen) {
       return;
