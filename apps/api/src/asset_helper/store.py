@@ -440,6 +440,7 @@ class InMemoryAvatarStore:
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}:{secret_key}",
+                "User-Agent": "asset-helper/1.0",
             },
         )
 
@@ -507,6 +508,7 @@ class InMemoryAvatarStore:
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}:{secret_key}",
+                "User-Agent": "asset-helper/1.0",
             },
         )
 
