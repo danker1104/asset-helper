@@ -1,11 +1,11 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+import os
 
 from fastapi import FastAPI, HTTPException, Request
-
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .domain.models import MoneyEvent
@@ -403,20 +403,48 @@ class MissionMyRankRead(BaseModel):
 def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
     app = FastAPI(title="Asset Helper API", version="0.1.0")
     app.state.store = store or InMemoryAvatarStore()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
+    
+    # Custom CORS middleware
+    @app.middleware("http")
+    async def cors_middleware(request: Request, call_next):
+        # Get origin from request
+        origin = request.headers.get("origin", "")
+        
+        # Check if origin is allowed
+        allowed_local = origin in [
             "http://127.0.0.1:3100",
-            "http://localhost:3100", 
+            "http://localhost:3100",
             "http://localhost:3000",
             "http://127.0.0.1:3000",
-            "https://ca-danker-e2-20260601-web.salmonforest-66a190e0.koreacentral.azurecontainerapps.io",
-        ],
-        allow_origin_regex=r"https://.*azurecontainerapps\.io$",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+        ]
+        allowed_azure = origin.endswith(".azurecontainerapps.io") and origin.startswith("https://")
+        
+        is_allowed = allowed_local or allowed_azure
+        
+        # Handle OPTIONS request
+        if request.method == "OPTIONS" and is_allowed:
+            return JSONResponse(
+                content={},
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+                },
+            )
+        
+        # Process actual request
+        response = await call_next(request)
+        
+        # Add CORS headers to response if origin is allowed
+        if is_allowed:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+        
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
