@@ -686,8 +686,9 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                 _, tail = str(exc).split("bankapi_http_", maxsplit=1)
                 status_code_str, _, upstream_message = tail.partition(":")
                 status_code = int(status_code_str) if status_code_str.isdigit() else 502
+                mapped_status_code = status_code if 400 <= status_code <= 599 else 502
                 raise HTTPException(
-                    status_code=502,
+                    status_code=mapped_status_code,
                     detail={
                         "code": "bankapi_upstream_error",
                         "message": upstream_message or "bankapi request failed",
@@ -747,8 +748,9 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                 _, tail = str(exc).split("bankapi_http_", maxsplit=1)
                 status_code_str, _, upstream_message = tail.partition(":")
                 status_code = int(status_code_str) if status_code_str.isdigit() else 502
+                mapped_status_code = status_code if 400 <= status_code <= 599 else 502
                 raise HTTPException(
-                    status_code=502,
+                    status_code=mapped_status_code,
                     detail={
                         "code": "bankapi_upstream_error",
                         "message": upstream_message or "bankapi request failed",
@@ -811,8 +813,9 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
                 _, tail = str(exc).split("bankapi_http_", maxsplit=1)
                 status_code_str, _, upstream_message = tail.partition(":")
                 status_code = int(status_code_str) if status_code_str.isdigit() else 502
+                mapped_status_code = status_code if 400 <= status_code <= 599 else 502
                 raise HTTPException(
-                    status_code=502,
+                    status_code=mapped_status_code,
                     detail={
                         "code": "bankapi_upstream_error",
                         "message": upstream_message or "bankapi request failed",
