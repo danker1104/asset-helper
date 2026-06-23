@@ -82,7 +82,7 @@ try {
     $apiJob = Start-Job -Name 'asset-helper-api' -ArgumentList $apiPath, $python -ScriptBlock {
         param($workDir, $pythonExe)
         Set-Location $workDir
-        & $pythonExe -m uvicorn asset_helper.main:create_app --factory --reload --app-dir src 2>&1 |
+        & $pythonExe -m uvicorn asset_helper.main:create_app --factory --reload --app-dir src --env-file .env 2>&1 |
             ForEach-Object { "[api] $_" }
     }
 

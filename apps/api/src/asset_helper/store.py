@@ -451,9 +451,20 @@ class InMemoryAvatarStore:
             try:
                 raw_error = exc.read().decode("utf-8")
                 parsed_error = json.loads(raw_error)
-                message = parsed_error.get("message") or parsed_error.get("error") or "bankapi_http_error"
+                message = parsed_error.get("message") or parsed_error.get("error")
+                if not message and isinstance(parsed_error.get("errors"), list) and parsed_error.get("errors"):
+                    first_error = parsed_error.get("errors")[0]
+                    if isinstance(first_error, dict):
+                        message = first_error.get("message") or first_error.get("reason")
+                if not message:
+                    message = f"bankapi_http_error(status={status_code})"
             except Exception:
-                message = "bankapi_http_error"
+                fallback = ""
+                try:
+                    fallback = raw_error.strip()[:200]
+                except Exception:
+                    fallback = ""
+                message = fallback or f"bankapi_http_error(status={status_code})"
             raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
         except urlerror.URLError as exc:
             raise ValueError("bankapi_request_failed") from exc

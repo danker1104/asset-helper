@@ -19,7 +19,7 @@ if (-not (Test-Path $python)) {
 	throw "Python executable not found: $python"
 }
 
-$apiCommand = "Set-Location '$apiPath'; & '$python' -m uvicorn asset_helper.main:create_app --factory --reload --app-dir src"
+$apiCommand = "Set-Location '$apiPath'; & '$python' -m uvicorn asset_helper.main:create_app --factory --reload --app-dir src --env-file .env"
 $webCommand = "Set-Location '$webPath'; npm.cmd run dev -- --port 3100 --hostname 127.0.0.1"
 
 Start-Process pwsh -ArgumentList @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $apiCommand) | Out-Null

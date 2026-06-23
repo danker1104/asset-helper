@@ -311,6 +311,26 @@ function formatKrw(value: number) {
   return `${Math.round(value).toLocaleString("ko-KR")}원`;
 }
 
+function resolveOpenBankingUserId(stateParam: string | null, currentUserId: string) {
+  if (stateParam) {
+    const trimmed = stateParam.trim();
+    if (trimmed) {
+      try {
+        const parsed = JSON.parse(trimmed) as { user_id?: string; userId?: string };
+        const fromJson = parsed.user_id || parsed.userId;
+        if (typeof fromJson === "string" && fromJson.trim()) {
+          return fromJson.trim();
+        }
+      } catch {
+        // state가 단순 문자열인 경우를 허용한다.
+      }
+      return trimmed;
+    }
+  }
+
+  return currentUserId.trim();
+}
+
 function estimateExecutionPrice(company: StockCompany, qty: number, side: "buy" | "sell") {
   const impactRatio = qty / company.liquidity;
   return Math.max(
@@ -600,24 +620,44 @@ export default function HomePage() {
           resident_number: bankResidentNumber.trim(),
         }),
       });
-      const body = await response.json();
+      const raw = await response.text();
+      let body: unknown = null;
+      try {
+        body = raw ? JSON.parse(raw) : null;
+      } catch {
+        body = null;
+      }
+
+      const parsedBody = body as {
+        message?: string;
+        detail?: { message?: string };
+        error?: { message?: string; details?: unknown };
+      } | null;
+
       if (!response.ok) {
         let errorMessage = "계좌 등록에 실패했습니다.";
-        const detailMessage = body?.detail?.message || body?.message || "";
-        
-        // Bank API에서 계좌가 없다는 에러 체크
-        if (detailMessage.includes("존재") || detailMessage.includes("없") || detailMessage.includes("not found") || detailMessage.includes("invalid")) {
-          errorMessage = "존재하지 않습니다.";
-        } else if (detailMessage) {
-          errorMessage = detailMessage;
+        const detailMessage =
+          parsedBody?.error?.message ||
+          parsedBody?.detail?.message ||
+          parsedBody?.message ||
+          "";
+
+        if (detailMessage) {
+          errorMessage = `계좌 등록 실패 (${response.status}): ${detailMessage}`;
+          const errorDetails = parsedBody?.error?.details;
+          if (typeof errorDetails === "string" && errorDetails.trim()) {
+            errorMessage += ` / ${errorDetails.trim()}`;
+          }
+        } else if (raw.trim()) {
+          errorMessage = `계좌 등록 실패 (${response.status}): ${raw.trim()}`;
         }
-        
+
         setBankStatusMessage(errorMessage);
         return;
       }
 
-      setBankLink(body?.link || null);
-      setBankStatusMessage(body?.message || "계좌 등록이 완료되었습니다.");
+      setBankLink(parsedBody?.link || null);
+      setBankStatusMessage(parsedBody?.message || "계좌 등록이 완료되었습니다.");
       await pollBankApi(currentUserId);
     } catch {
       setBankStatusMessage("계좌 등록 중 오류가 발생했습니다.");
@@ -659,6 +699,70 @@ export default function HomePage() {
 
     return () => clearInterval(timer);
   }, [bankLink?.account_number_masked, bankLink?.bank_code, currentUserId, isLoggedIn]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authorizationCode = params.get("code") || params.get("authorization_code");
+    if (!authorizationCode) {
+      return;
+    }
+
+    const stateParam = params.get("state");
+    const storedUserId = window.localStorage.getItem("asset-helper-last-user-id") || "";
+    const resolvedUserId =
+      resolveOpenBankingUserId(stateParam, currentUserId) ||
+      storedUserId.trim();
+
+    if (!resolvedUserId) {
+      setIsBankPanelOpen(true);
+      setBankStatusMessage("오픈뱅킹 콜백은 받았지만 사용자 정보가 없어 연결할 수 없습니다. 다시 로그인 후 시도해 주세요.");
+      return;
+    }
+
+    const processKey = `openbanking-callback-${resolvedUserId}-${authorizationCode}`;
+    if (window.sessionStorage.getItem(processKey)) {
+      return;
+    }
+    window.sessionStorage.setItem(processKey, "1");
+
+    setIsBankPanelOpen(true);
+    setBankStatusMessage("오픈뱅킹 콜백을 처리 중입니다...");
+
+    const run = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/openbanking/connect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: resolvedUserId,
+            authorization_code: authorizationCode,
+          }),
+        });
+
+        const body = await response.json();
+        if (!response.ok) {
+          const message = body?.error?.message || body?.message || "오픈뱅킹 연결에 실패했습니다.";
+          setBankStatusMessage(`오픈뱅킹 연결 실패: ${message}`);
+          return;
+        }
+
+        setCurrentUserId((prev) => prev || resolvedUserId);
+        setBankStatusMessage("오픈뱅킹 연결이 완료되었습니다.");
+      } catch {
+        setBankStatusMessage("오픈뱅킹 콜백 처리 중 오류가 발생했습니다.");
+      } finally {
+        const nextParams = new URLSearchParams(window.location.search);
+        nextParams.delete("code");
+        nextParams.delete("authorization_code");
+        nextParams.delete("state");
+        const nextSearch = nextParams.toString();
+        const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash}`;
+        window.history.replaceState({}, "", nextUrl);
+      }
+    };
+
+    void run();
+  }, [apiBaseUrl, currentUserId]);
 
   const completeMissionFromUi = async (missionId: string) => {
     if (missionDone[missionId]) {
@@ -873,6 +977,7 @@ export default function HomePage() {
       const nickname = body?.nickname || signupNickname || loginUserId;
       setIsLoggedIn(true);
       setCurrentUserId(body.user_id || normalizedUserId);
+      window.localStorage.setItem("asset-helper-last-user-id", body.user_id || normalizedUserId);
       setLoggedInNickname(nickname);
       setIsAuthPanelOpen(false);
       setLoginMessage(`로그인 성공: ${body.user_id}`);
@@ -893,6 +998,7 @@ export default function HomePage() {
     setBankCurrentBalance(null);
     setBankStatusMessage("");
     setBankPolling(false);
+    window.localStorage.removeItem("asset-helper-last-user-id");
     setLoginMessage("");
     setSignupMessage("");
   };
