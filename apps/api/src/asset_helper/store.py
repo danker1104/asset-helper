@@ -536,6 +536,19 @@ class InMemoryAvatarStore:
                 except Exception:
                     fallback = ""
                 message = fallback or f"bankapi_http_error(status={status_code})"
+            
+            # If account is already registered, still save it locally for future reference
+            if status_code == 400 and "이미 등록된 계좌" in message:
+                self._bankapi_links[user_id] = {
+                    "bank_code": bank_code,
+                    "account_number": account_number,
+                    "account_password": account_password,
+                    "resident_number": resident_number,
+                    "linked_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self._persist_snapshot()
+                return {"success": False, "message": message}
+            
             raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
         except TimeoutError as exc:
             raise ValueError("bankapi_timeout:은행 API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.") from exc
