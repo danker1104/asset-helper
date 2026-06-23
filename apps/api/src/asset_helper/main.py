@@ -731,7 +731,10 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
             summary = app.state.store.get_bankapi_link_summary(payload.user_id)
         except ValueError as exc:
             if str(exc) == "user_not_found":
-                raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "user not found"}) from exc
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "user_not_found", "message": "사용자를 찾을 수 없습니다. 먼저 로그인 또는 회원가입을 진행해 주세요."},
+                ) from exc
             if str(exc) == "bankapi_credentials_missing":
                 raise HTTPException(
                     status_code=500,
