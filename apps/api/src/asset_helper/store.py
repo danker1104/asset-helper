@@ -467,6 +467,8 @@ class InMemoryAvatarStore:
                     fallback = ""
                 message = fallback or f"bankapi_http_error(status={status_code})"
             raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
+        except TimeoutError as exc:
+            raise ValueError("bankapi_timeout:은행 API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.") from exc
         except urlerror.URLError as exc:
             raise ValueError("bankapi_request_failed") from exc
 
@@ -535,6 +537,8 @@ class InMemoryAvatarStore:
                     fallback = ""
                 message = fallback or f"bankapi_http_error(status={status_code})"
             raise ValueError(f"bankapi_http_{status_code}:{message}") from exc
+        except TimeoutError as exc:
+            raise ValueError("bankapi_timeout:은행 API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.") from exc
         except urlerror.URLError as exc:
             raise ValueError("bankapi_request_failed") from exc
 
