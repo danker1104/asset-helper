@@ -405,8 +405,14 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
     app.state.store = store or InMemoryAvatarStore()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:3100", "http://localhost:3000", "http://127.0.0.1:3000"],
-        allow_origin_regex=r"https://.*\.azurecontainerapps\.io",
+        allow_origins=[
+            "http://127.0.0.1:3100",
+            "http://localhost:3100", 
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "https://ca-danker-e2-20260601-web.salmonforest-66a190e0.koreacentral.azurecontainerapps.io",
+        ],
+        allow_origin_regex=r"https://.*azurecontainerapps\.io$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
