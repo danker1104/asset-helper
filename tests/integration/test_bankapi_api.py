@@ -66,3 +66,33 @@ async def test_poll_bankapi_account_returns_504_on_timeout() -> None:
         "code": "bankapi_timeout",
         "message": "은행 API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.",
     }
+
+
+@pytest.mark.asyncio
+async def test_delete_bankapi_account_removes_saved_link() -> None:
+    store = _build_store()
+    store.create_profile(email="demo@example.com", user_id="demo")
+    store._bankapi_links["demo"] = {
+        "bank_code": "NH",
+        "account_number": "3521848550713",
+        "account_password": "1877",
+        "resident_number": "091104",
+        "linked_at": "2026-06-24T00:00:00+00:00",
+    }
+    store._bankapi_balance_history["demo"] = [{"balance": 1000, "polled_at": "2026-06-24T00:00:00+00:00"}]
+    store._bankapi_transaction_history["demo"] = [{"date": "20260624", "time": "090000", "amount": 100, "balance": 900, "type": "withdrawal"}]
+    store._bankapi_seen_tx_keys["demo"] = {"tx-1"}
+    store._bankapi_last_polled_at["demo"] = "2026-06-24T00:00:00+00:00"
+    app = create_app(store=store)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete("/bankapi/accounts/me", params={"user_id": "demo"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["message"] == "연동된 계좌를 삭제했습니다."
+
+        summary_response = await client.get("/bankapi/accounts/me", params={"user_id": "demo"})
+        assert summary_response.status_code == 404

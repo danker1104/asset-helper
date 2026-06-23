@@ -220,6 +220,14 @@ class BankApiAccountRegisterRead(BaseModel):
     link: BankApiLinkSummaryRead
 
 
+class BankApiAccountDeleteRead(BaseModel):
+    success: bool
+    message: str
+    user_id: str
+    bank_code: str
+    account_number_masked: str
+
+
 class BankApiBalancePointRead(BaseModel):
     balance: int
     polled_at: str
@@ -817,6 +825,19 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
         if summary is None:
             raise HTTPException(status_code=404, detail={"code": "bankapi_link_not_found", "message": "bankapi link not found"})
         return BankApiLinkSummaryRead(**summary)
+
+    @app.delete("/bankapi/accounts/me", response_model=BankApiAccountDeleteRead)
+    def delete_bankapi_account_link(user_id: str) -> BankApiAccountDeleteRead:
+        try:
+            result = app.state.store.delete_bankapi_link(user_id)
+        except ValueError as exc:
+            if str(exc) == "user_not_found":
+                raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "user not found"}) from exc
+            if str(exc) == "bankapi_link_not_found":
+                raise HTTPException(status_code=404, detail={"code": "bankapi_link_not_found", "message": "bankapi link not found"}) from exc
+            raise
+
+        return BankApiAccountDeleteRead(**result)
 
     @app.post("/bankapi/poll", response_model=BankApiPollRead)
     def poll_bankapi_account(user_id: str) -> BankApiPollRead:

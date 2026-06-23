@@ -616,6 +616,29 @@ class InMemoryAvatarStore:
             "last_polled_at": self._bankapi_last_polled_at.get(user_id),
         }
 
+    def delete_bankapi_link(self, user_id: str) -> dict[str, object]:
+        profile = self._profiles.get(user_id)
+        if profile is None:
+            raise ValueError("user_not_found")
+
+        link = self._bankapi_links.pop(user_id, None)
+        if link is None:
+            raise ValueError("bankapi_link_not_found")
+
+        self._bankapi_balance_history.pop(user_id, None)
+        self._bankapi_transaction_history.pop(user_id, None)
+        self._bankapi_seen_tx_keys.pop(user_id, None)
+        self._bankapi_last_polled_at.pop(user_id, None)
+        self._persist_snapshot()
+
+        return {
+            "success": True,
+            "message": "연동된 계좌를 삭제했습니다.",
+            "user_id": user_id,
+            "bank_code": str(link.get("bank_code", "")),
+            "account_number_masked": str(link.get("account_number", ""))[-4:].rjust(len(str(link.get("account_number", ""))), "*") if link.get("account_number") else "",
+        }
+
     def poll_bankapi_linked_account(self, user_id: str, now: datetime | None = None) -> dict[str, object]:
         profile = self._profiles.get(user_id)
         if profile is None:

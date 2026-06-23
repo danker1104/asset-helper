@@ -202,6 +202,14 @@ type BankApiPollResult = {
   polled_at: string;
 };
 
+type BankApiDeleteResult = {
+  success: boolean;
+  message: string;
+  user_id: string;
+  bank_code: string;
+  account_number_masked: string;
+};
+
 type BankApiBalancePoint = {
   balance: number;
   polled_at: string;
@@ -540,11 +548,19 @@ export default function HomePage() {
     }
   };
 
+  const clearBankUiState = () => {
+    setBankLink(null);
+    setBankBalanceHistory([]);
+    setBankTransactionHistory([]);
+    setBankCurrentBalance(null);
+    setBankPolling(false);
+  };
+
   const loadBankLink = async (userId: string) => {
     try {
       const response = await fetch(`${apiBaseUrl}/bankapi/accounts/me?user_id=${encodeURIComponent(userId)}`);
       if (!response.ok) {
-        setBankLink(null);
+        clearBankUiState();
         return;
       }
       const body = (await response.json()) as BankApiLinkSummary;
@@ -674,6 +690,41 @@ export default function HomePage() {
     }
   };
 
+  const deleteBankAccount = async () => {
+    if (!currentUserId) {
+      setBankStatusMessage("로그인 후 계좌를 삭제해 주세요.");
+      return;
+    }
+
+    setBankStatusMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/bankapi/accounts/me?user_id=${encodeURIComponent(currentUserId)}`, {
+        method: "DELETE",
+      });
+      const raw = await response.text();
+      let body: unknown = null;
+      try {
+        body = raw ? JSON.parse(raw) : null;
+      } catch {
+        body = null;
+      }
+
+      if (!response.ok) {
+        const errorMessage =
+          (body as { error?: { message?: string } } | null)?.error?.message ||
+          (raw.trim() ? raw.trim() : "연동 계좌 삭제에 실패했습니다.");
+        setBankStatusMessage(errorMessage);
+        return;
+      }
+
+      const result = body as BankApiDeleteResult;
+      clearBankUiState();
+      setBankStatusMessage(result.message || "연동 계좌를 삭제했습니다.");
+    } catch {
+      setBankStatusMessage("연동 계좌 삭제 중 오류가 발생했습니다.");
+    }
+  };
+
   useEffect(() => {
     if (activeTab !== "랭킹" || !isLoggedIn) {
       setMyMissionRank(null);
@@ -686,10 +737,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!isLoggedIn || !currentUserId) {
-      setBankLink(null);
-      setBankBalanceHistory([]);
-      setBankTransactionHistory([]);
-      setBankCurrentBalance(null);
+      clearBankUiState();
       return;
     }
 
@@ -1002,12 +1050,8 @@ export default function HomePage() {
     setLoggedInNickname("");
     setIsAuthPanelOpen(false);
     setIsBankPanelOpen(false);
-    setBankLink(null);
-    setBankBalanceHistory([]);
-    setBankTransactionHistory([]);
-    setBankCurrentBalance(null);
+    clearBankUiState();
     setBankStatusMessage("");
-    setBankPolling(false);
     window.localStorage.removeItem("asset-helper-last-user-id");
     setLoginMessage("");
     setSignupMessage("");
@@ -1272,6 +1316,14 @@ export default function HomePage() {
                     style={{ border: "1px solid #0f172a", borderRadius: 999, background: "white", color: "#0f172a", padding: "10px 16px", fontWeight: 700, cursor: "pointer" }}
                   >
                     지금 조회
+                  </button>
+                  <button
+                    type="button"
+                    onClick={deleteBankAccount}
+                    disabled={!bankLink}
+                    style={{ border: "1px solid #dc2626", borderRadius: 999, background: bankLink ? "white" : "#f8fafc", color: bankLink ? "#dc2626" : "#94a3b8", padding: "10px 16px", fontWeight: 700, cursor: bankLink ? "pointer" : "not-allowed" }}
+                  >
+                    등록 계좌 삭제
                   </button>
                   {bankPolling ? <span style={{ fontSize: 13, color: "#475569", alignSelf: "center" }}>조회 중...</span> : null}
                 </div>
