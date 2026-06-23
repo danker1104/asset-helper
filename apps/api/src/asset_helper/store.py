@@ -106,6 +106,10 @@ class InMemoryAvatarStore:
 
     def _load_accounts_from_db(self) -> None:
         with self._db_lock, sqlite3.connect(self._db_path) as db:
+            # Delete test accounts on each startup to keep DB clean
+            db.execute("DELETE FROM accounts WHERE user_id LIKE 'testuser%'")
+            db.commit()
+            
             rows = db.execute(
                 """
                 SELECT user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount
@@ -189,6 +193,34 @@ class InMemoryAvatarStore:
 
         state = pickle.loads(row[0])
         self.__dict__.update(state)
+        
+        # Clean up test accounts on each startup
+        self._clean_test_accounts()
+
+    def _clean_test_accounts(self) -> None:
+        """Remove test accounts (testuser*) and all associated data from memory."""
+        test_user_ids = [uid for uid in self._credentials.keys() if uid.startswith("testuser")]
+        
+        for user_id in test_user_ids:
+            # Remove from all dictionaries
+            cred = self._credentials.get(user_id)
+            if cred:
+                self._password_index.pop(cred.password, None)
+                self._nickname_index.pop(cred.nickname, None)
+            self._credentials.pop(user_id, None)
+            self._profiles.pop(user_id, None)
+            self._bankapi_links.pop(user_id, None)
+            self._bankapi_balance_history.pop(user_id, None)
+            self._bankapi_transaction_history.pop(user_id, None)
+            self._bankapi_seen_tx_keys.pop(user_id, None)
+            self._bankapi_last_polled_at.pop(user_id, None)
+            self._auto_save_rules.pop(user_id, None)
+            self._groups.pop(user_id, None)
+            self._push_subscriptions.pop(user_id, None)
+            self._learning_progress.pop(user_id, None)
+            self._openbanking_connections.pop(user_id, None)
+            self._openbanking_poll_state.pop(user_id, None)
+            self._thresholds.pop(user_id, None)
 
     def _persist_snapshot(self) -> None:
         payload = self._snapshot_state()
