@@ -523,19 +523,18 @@ export default function HomePage() {
     try {
       const response = await fetch(`${apiBaseUrl}/missions/completed?user_id=${encodeURIComponent(userId)}`);
       if (!response.ok) {
+        setMissionDone({});
         return;
       }
       const body = await response.json();
       const missionIds = Array.isArray(body?.mission_ids) ? body.mission_ids : [];
-      setMissionDone((prev) => {
-        const next = { ...prev };
-        for (const missionId of missionIds) {
-          if (typeof missionId === "string" && missionId.trim()) {
-            next[missionId] = true;
-          }
+      const next: Record<string, boolean> = {};
+      for (const missionId of missionIds) {
+        if (typeof missionId === "string" && missionId.trim()) {
+          next[missionId] = true;
         }
-        return next;
-      });
+      }
+      setMissionDone(next);
     } catch {
       // ignore transient fetch errors
     }
@@ -782,10 +781,19 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!isLoggedIn || !currentUserId) {
+      setCash(1000000);
+      setHoldings({});
+      setCompanies(initialCompanies);
+      setTradeMessage("");
       return;
     }
     const raw = window.localStorage.getItem(userPortfolioStorageKey(currentUserId));
     if (!raw) {
+      // New account (or no snapshot yet): start from defaults instead of previous account state.
+      setCash(1000000);
+      setHoldings({});
+      setCompanies(initialCompanies);
+      setTradeMessage("");
       return;
     }
 
@@ -806,6 +814,10 @@ export default function HomePage() {
       }
     } catch {
       // ignore broken local data
+      setCash(1000000);
+      setHoldings({});
+      setCompanies(initialCompanies);
+      setTradeMessage("");
     }
   }, [currentUserId, isLoggedIn]);
 
@@ -823,10 +835,12 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!isLoggedIn || !currentUserId) {
+      setMissionDone({});
       return;
     }
     const raw = window.localStorage.getItem(userMissionDoneStorageKey(currentUserId));
     if (!raw) {
+      setMissionDone({});
       return;
     }
     try {
@@ -836,6 +850,7 @@ export default function HomePage() {
       }
     } catch {
       // ignore broken local data
+      setMissionDone({});
     }
   }, [currentUserId, isLoggedIn]);
 
