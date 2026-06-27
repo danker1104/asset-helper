@@ -62,6 +62,7 @@ class InMemoryAvatarStore:
         self._password_index: dict[str, str] = {}
         self._nickname_index: dict[str, str] = {}
         self._mission_stats: dict[str, int] = {}
+        self._completed_mission_ids: dict[str, set[str]] = {}
         self._account_created_at: dict[str, str] = {}
         self._openbanking_connections: dict[str, OpenBankingConnection] = {}
         self._openbanking_poll_state: dict[str, OpenBankingPollState] = {}
@@ -233,6 +234,7 @@ class InMemoryAvatarStore:
             self._credentials.pop(user_id, None)
             self._profiles.pop(user_id, None)
             self._mission_stats.pop(user_id, None)
+            self._completed_mission_ids.pop(user_id, None)
             self._account_created_at.pop(user_id, None)
             self._bankapi_links.pop(user_id, None)
             self._bankapi_balance_history.pop(user_id, None)
@@ -329,6 +331,7 @@ class InMemoryAvatarStore:
             self._nickname_index[nickname] = user_id
             self._account_created_at[user_id] = created_at
             self._mission_stats[user_id] = completed_count
+            self._completed_mission_ids.setdefault(user_id, set())
 
         profile = self.create_profile(
             email=email,
@@ -1116,9 +1119,16 @@ class InMemoryAvatarStore:
     def has_completed_learning_card(self, user_id: str, card_id: str) -> bool:
         return card_id in self._learning_progress.get(user_id, set())
 
-    def complete_mission(self, user_id: str) -> int:
+    def complete_mission(self, user_id: str, mission_id: str | None = None) -> tuple[int, bool]:
         if user_id not in self._credentials and not self._load_account_from_table(user_id):
             raise ValueError("user_not_found")
+
+        normalized_mission_id = (mission_id or "").strip()
+        if normalized_mission_id:
+            completed_ids = self._completed_mission_ids.setdefault(user_id, set())
+            if normalized_mission_id in completed_ids:
+                return self._mission_stats.get(user_id, 0), True
+            completed_ids.add(normalized_mission_id)
 
         completed_count = self._mission_stats.get(user_id, 0) + 1
         self._mission_stats[user_id] = completed_count
@@ -1142,7 +1152,12 @@ class InMemoryAvatarStore:
             completed_count=completed_count,
         )
         self._persist_snapshot()
-        return completed_count
+        return completed_count, False
+
+    def list_completed_missions(self, user_id: str) -> list[str]:
+        if user_id not in self._credentials and not self._load_account_from_table(user_id):
+            raise ValueError("user_not_found")
+        return sorted(self._completed_mission_ids.get(user_id, set()))
 
     def list_mission_ranking(self, limit: int = 50) -> list[dict[str, object]]:
         safe_limit = max(1, min(200, limit))

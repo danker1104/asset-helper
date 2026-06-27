@@ -319,6 +319,14 @@ function formatKrw(value: number) {
   return `${Math.round(value).toLocaleString("ko-KR")}원`;
 }
 
+function userPortfolioStorageKey(userId: string) {
+  return `asset-helper-portfolio-${userId}`;
+}
+
+function userMissionDoneStorageKey(userId: string) {
+  return `asset-helper-mission-done-${userId}`;
+}
+
 function resolveOpenBankingUserId(stateParam: string | null, currentUserId: string) {
   if (stateParam) {
     const trimmed = stateParam.trim();
@@ -399,12 +407,16 @@ export default function HomePage() {
   const [bankStatusMessage, setBankStatusMessage] = useState("");
   const [bankPolling, setBankPolling] = useState(false);
   const [isBankPanelOpen, setIsBankPanelOpen] = useState(false);
+  const sessionUserIdKey = "asset-helper-last-user-id";
+  const sessionNicknameKey = "asset-helper-last-nickname";
 
   // Restore session from localStorage on mount
   useEffect(() => {
-    const storedUserId = window.localStorage.getItem("asset-helper-last-user-id");
+    const storedUserId = window.localStorage.getItem(sessionUserIdKey);
+    const storedNickname = window.localStorage.getItem(sessionNicknameKey);
     if (storedUserId && storedUserId.trim()) {
       setCurrentUserId(storedUserId.trim());
+      setLoggedInNickname((storedNickname || "").trim());
       setIsLoggedIn(true);
     }
   }, []);
@@ -506,6 +518,28 @@ export default function HomePage() {
 
   const completedMissionCount = missionCards.filter((mission) => missionDone[mission.id]).length;
   const successRate = Math.round((completedMissionCount / missionCards.length) * 100);
+
+  const loadCompletedMissions = async (userId: string) => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/missions/completed?user_id=${encodeURIComponent(userId)}`);
+      if (!response.ok) {
+        return;
+      }
+      const body = await response.json();
+      const missionIds = Array.isArray(body?.mission_ids) ? body.mission_ids : [];
+      setMissionDone((prev) => {
+        const next = { ...prev };
+        for (const missionId of missionIds) {
+          if (typeof missionId === "string" && missionId.trim()) {
+            next[missionId] = true;
+          }
+        }
+        return next;
+      });
+    } catch {
+      // ignore transient fetch errors
+    }
+  };
 
   const loadMissionRanking = async () => {
     setMissionRankingLoading(true);
@@ -743,7 +777,74 @@ export default function HomePage() {
 
     loadBankLink(currentUserId);
     loadBankHistory(currentUserId);
+    void loadCompletedMissions(currentUserId);
   }, [currentUserId, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) {
+      return;
+    }
+    const raw = window.localStorage.getItem(userPortfolioStorageKey(currentUserId));
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as {
+        cash?: number;
+        holdings?: Record<string, number>;
+        companies?: StockCompany[];
+      };
+      if (typeof parsed.cash === "number" && Number.isFinite(parsed.cash)) {
+        setCash(parsed.cash);
+      }
+      if (parsed.holdings && typeof parsed.holdings === "object") {
+        setHoldings(parsed.holdings);
+      }
+      if (Array.isArray(parsed.companies) && parsed.companies.length === initialCompanies.length) {
+        setCompanies(parsed.companies);
+      }
+    } catch {
+      // ignore broken local data
+    }
+  }, [currentUserId, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) {
+      return;
+    }
+    const snapshot = {
+      cash,
+      holdings,
+      companies,
+    };
+    window.localStorage.setItem(userPortfolioStorageKey(currentUserId), JSON.stringify(snapshot));
+  }, [cash, companies, currentUserId, holdings, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) {
+      return;
+    }
+    const raw = window.localStorage.getItem(userMissionDoneStorageKey(currentUserId));
+    if (!raw) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Record<string, boolean>;
+      if (parsed && typeof parsed === "object") {
+        setMissionDone(parsed);
+      }
+    } catch {
+      // ignore broken local data
+    }
+  }, [currentUserId, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) {
+      return;
+    }
+    window.localStorage.setItem(userMissionDoneStorageKey(currentUserId), JSON.stringify(missionDone));
+  }, [currentUserId, isLoggedIn, missionDone]);
 
   useEffect(() => {
     if (!isLoggedIn || !currentUserId || !bankLink) {
@@ -841,7 +942,7 @@ export default function HomePage() {
       const response = await fetch(`${apiBaseUrl}/missions/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: currentUserId }),
+        body: JSON.stringify({ user_id: currentUserId, mission_id: missionId }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -849,7 +950,11 @@ export default function HomePage() {
         return;
       }
 
-      setMissionCompleteMessage(`계정 누적 미션 완료 수: ${body.completed_count}`);
+      if (body?.already_completed) {
+        setMissionCompleteMessage(`이미 완료한 미션입니다. 계정 누적 미션 완료 수: ${body.completed_count}`);
+      } else {
+        setMissionCompleteMessage(`계정 누적 미션 완료 수: ${body.completed_count}`);
+      }
       await loadMissionRanking();
       await loadMyMissionRank();
     } catch {
@@ -1035,7 +1140,8 @@ export default function HomePage() {
       const nickname = body?.nickname || signupNickname || loginUserId;
       setIsLoggedIn(true);
       setCurrentUserId(body.user_id || normalizedUserId);
-      window.localStorage.setItem("asset-helper-last-user-id", body.user_id || normalizedUserId);
+      window.localStorage.setItem(sessionUserIdKey, body.user_id || normalizedUserId);
+      window.localStorage.setItem(sessionNicknameKey, nickname);
       setLoggedInNickname(nickname);
       setIsAuthPanelOpen(false);
       setLoginMessage(`로그인 성공: ${body.user_id}`);
@@ -1052,7 +1158,8 @@ export default function HomePage() {
     setIsBankPanelOpen(false);
     clearBankUiState();
     setBankStatusMessage("");
-    window.localStorage.removeItem("asset-helper-last-user-id");
+    window.localStorage.removeItem(sessionUserIdKey);
+    window.localStorage.removeItem(sessionNicknameKey);
     setLoginMessage("");
     setSignupMessage("");
   };
@@ -1109,7 +1216,7 @@ export default function HomePage() {
                 flex: "0 1 auto",
               }}
             >
-              {loggedInNickname} 님
+              {(loggedInNickname || currentUserId).trim()} 님
             </div>
             <button
               type="button"

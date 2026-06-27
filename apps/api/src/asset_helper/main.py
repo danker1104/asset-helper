@@ -383,11 +383,18 @@ class AvatarRead(BaseModel):
 
 class MissionCompleteCreate(BaseModel):
     user_id: str
+    mission_id: str | None = None
 
 
 class MissionCompleteRead(BaseModel):
     user_id: str
     completed_count: int
+    already_completed: bool
+
+
+class MissionCompletedListRead(BaseModel):
+    user_id: str
+    mission_ids: list[str]
 
 
 class MissionRankingItemRead(BaseModel):
@@ -1238,13 +1245,24 @@ def create_app(store: InMemoryAvatarStore | None = None) -> FastAPI:
     @app.post("/missions/complete", response_model=MissionCompleteRead)
     def complete_mission(payload: MissionCompleteCreate) -> MissionCompleteRead:
         try:
-            completed_count = app.state.store.complete_mission(payload.user_id)
+            completed_count, already_completed = app.state.store.complete_mission(payload.user_id, mission_id=payload.mission_id)
         except ValueError as exc:
             if str(exc) == "user_not_found":
                 raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "user not found"}) from exc
             raise
 
-        return MissionCompleteRead(user_id=payload.user_id, completed_count=completed_count)
+        return MissionCompleteRead(user_id=payload.user_id, completed_count=completed_count, already_completed=already_completed)
+
+    @app.get("/missions/completed", response_model=MissionCompletedListRead)
+    def get_completed_missions(user_id: str) -> MissionCompletedListRead:
+        try:
+            mission_ids = app.state.store.list_completed_missions(user_id)
+        except ValueError as exc:
+            if str(exc) == "user_not_found":
+                raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "user not found"}) from exc
+            raise
+
+        return MissionCompletedListRead(user_id=user_id, mission_ids=mission_ids)
 
     @app.get("/missions/ranking", response_model=MissionRankingRead)
     def get_mission_ranking(limit: int = 20) -> MissionRankingRead:
