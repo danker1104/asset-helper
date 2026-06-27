@@ -47,6 +47,9 @@ var webContainerAppName = 'ca-${environmentName}-web'
 var normalizedEnvName = toLower(replace(environmentName, '-', ''))
 var acrBaseName = 'acr${normalizedEnvName}${suffix}'
 var acrName = length(acrBaseName) > 50 ? substring(acrBaseName, 0, 50) : acrBaseName
+var storageBaseName = 'st${normalizedEnvName}${suffix}'
+var storageAccountName = length(storageBaseName) > 24 ? substring(storageBaseName, 0, 24) : storageBaseName
+var accountTableName = 'assethelperaccounts'
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: workspaceName
@@ -72,6 +75,28 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' =
     publicNetworkAccess: 'Enabled'
   }
 }
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageAccountName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: true
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource accountTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  name: '${storageAccount.name}/default/${accountTableName}'
+}
+
+var tableConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: managedEnvironmentName
@@ -106,6 +131,10 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
             name: 'acr-password'
             value: containerRegistry.listCredentials().passwords[0].value
           }
+          {
+            name: 'table-connection-string'
+            value: tableConnectionString
+          }
         ],
         bankApiSecrets
       )
@@ -127,7 +156,19 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'api'
           image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
-          env: bankApiEnvVars
+          env: concat(
+            [
+              {
+                name: 'ASSET_HELPER_TABLE_CONNECTION_STRING'
+                secretRef: 'table-connection-string'
+              }
+              {
+                name: 'ASSET_HELPER_TABLE_NAME'
+                value: accountTableName
+              }
+            ],
+            bankApiEnvVars
+          )
           resources: {
             cpu: json('0.5')
             memory: '1Gi'

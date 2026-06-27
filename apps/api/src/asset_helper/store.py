@@ -25,6 +25,15 @@ from .domain.hp import recalculate_avatar
 from .domain.models import AuditLog, AvatarState, MoneyEvent
 from .domain.profile import UserProfile, create_profile, update_profile_settings
 
+try:
+    from azure.core.exceptions import AzureError, ResourceExistsError
+    from azure.data.tables import TableClient, TableServiceClient
+except ImportError:  # pragma: no cover - optional dependency for local runs without Azure.
+    AzureError = Exception
+    ResourceExistsError = Exception
+    TableClient = None
+    TableServiceClient = None
+
 
 class InMemoryAvatarStore:
     def __init__(self, db_path: str | None = None) -> None:
@@ -70,6 +79,9 @@ class InMemoryAvatarStore:
             )
             db.commit()
 
+        self._table_partition_key = os.environ.get("ASSET_HELPER_TABLE_PARTITION_KEY", "accounts")
+        self._table_client = self._init_table_client()
+
         self._profiles: dict[str, UserProfile] = {}
         self._avatars: dict[str, AvatarState] = {}
         self._seen_event_keys: set[tuple[str, str]] = set()
@@ -97,7 +109,91 @@ class InMemoryAvatarStore:
         self._auto_save_seen_keys: set[str] = set()
 
         self._load_snapshot()
+        self._load_accounts_from_table()
         self._load_accounts_from_db()
+
+    def _init_table_client(self):
+        connection_string = os.environ.get("ASSET_HELPER_TABLE_CONNECTION_STRING")
+        table_name = os.environ.get("ASSET_HELPER_TABLE_NAME", "assethelperaccounts")
+        if not connection_string or TableServiceClient is None:
+            return None
+
+        try:
+            service_client = TableServiceClient.from_connection_string(connection_string)
+            table_client = service_client.get_table_client(table_name)
+            table_client.create_table()
+            return table_client
+        except ResourceExistsError:
+            return service_client.get_table_client(table_name)
+        except AzureError:
+            return None
+
+    def _load_accounts_from_table(self) -> None:
+        if self._table_client is None:
+            return
+
+        try:
+            entities = self._table_client.query_entities(
+                query_filter="PartitionKey eq @partition",
+                parameters={"partition": self._table_partition_key},
+            )
+        except AzureError:
+            return
+
+        for entity in entities:
+            user_id = str(entity.get("RowKey", ""))
+            password = str(entity.get("password", ""))
+            nickname = str(entity.get("nickname", ""))
+            if not user_id or not password or not nickname:
+                continue
+
+            self._credentials[user_id] = UserCredential(user_id=user_id, password=password, nickname=nickname)
+            self._password_index[password] = user_id
+            self._nickname_index[nickname] = user_id
+            if user_id not in self._profiles:
+                self._profiles[user_id] = create_profile(
+                    email=str(entity.get("email", "")),
+                    user_id=user_id,
+                    avatar_type=str(entity.get("avatar_type", "plant")),
+                    intensity=int(entity.get("intensity", 1)),
+                    text_mode=bool(entity.get("text_mode", False)),
+                    daily_alert_cap=int(entity.get("daily_alert_cap", 3)),
+                    baseline_amount=float(entity.get("baseline_amount", 30000.0)),
+                )
+
+    def _upsert_account_to_table(
+        self,
+        *,
+        user_id: str,
+        password: str,
+        nickname: str,
+        email: str,
+        avatar_type: str,
+        intensity: int,
+        text_mode: bool,
+        daily_alert_cap: int,
+        baseline_amount: float,
+    ) -> None:
+        if self._table_client is None:
+            return
+
+        entity = {
+            "PartitionKey": self._table_partition_key,
+            "RowKey": user_id,
+            "password": password,
+            "nickname": nickname,
+            "email": email,
+            "avatar_type": avatar_type,
+            "intensity": intensity,
+            "text_mode": text_mode,
+            "daily_alert_cap": daily_alert_cap,
+            "baseline_amount": baseline_amount,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self._table_client.upsert_entity(entity=entity, mode="Replace")
+        except AzureError:
+            return
 
     @staticmethod
     def _to_stored_password(user_id: str, password: str) -> str:
@@ -324,6 +420,17 @@ class InMemoryAvatarStore:
         self._credentials[user_id] = credential
         self._password_index[stored_password] = user_id
         self._nickname_index[nickname] = user_id
+        self._upsert_account_to_table(
+            user_id=user_id,
+            password=stored_password,
+            nickname=nickname,
+            email=email,
+            avatar_type=avatar_type,
+            intensity=intensity,
+            text_mode=text_mode,
+            daily_alert_cap=daily_alert_cap,
+            baseline_amount=baseline_amount,
+        )
         self._persist_snapshot()
         return profile
 
