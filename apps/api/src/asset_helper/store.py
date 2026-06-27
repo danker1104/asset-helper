@@ -26,13 +26,14 @@ from .domain.profile import UserProfile, create_profile, update_profile_settings
 
 try:
     from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFoundError
-    from azure.data.tables import TableClient, TableServiceClient
+    from azure.data.tables import TableClient, TableServiceClient, UpdateMode
 except ImportError:  # pragma: no cover - optional dependency for local runs without Azure.
     AzureError = Exception
     ResourceExistsError = Exception
     ResourceNotFoundError = Exception
     TableClient = None
     TableServiceClient = None
+    UpdateMode = None
 
 
 class InMemoryAvatarStore:
@@ -178,7 +179,8 @@ class InMemoryAvatarStore:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            self._account_table_client.upsert_entity(entity=entity, mode="Replace")
+            mode = UpdateMode.REPLACE if UpdateMode is not None else "replace"
+            self._account_table_client.upsert_entity(entity=entity, mode=mode)
         except AzureError:
             return
 
@@ -258,7 +260,8 @@ class InMemoryAvatarStore:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            self._state_table_client.upsert_entity(entity=entity, mode="Replace")
+            mode = UpdateMode.REPLACE if UpdateMode is not None else "replace"
+            self._state_table_client.upsert_entity(entity=entity, mode=mode)
         except AzureError:
             return
 
