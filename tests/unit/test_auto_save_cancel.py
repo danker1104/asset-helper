@@ -15,7 +15,7 @@ def test_auto_save_rule_can_be_cancelled_during_grace() -> None:
         now=datetime(2026, 6, 13, tzinfo=timezone.utc),
     )
 
-    cancelled = store.cancel_auto_save_rule(rule.id)
+    cancelled = store.cancel_auto_save_rule(rule.id, now=datetime(2026, 6, 13, tzinfo=timezone.utc))
 
     assert cancelled.status == "cancelled"
 
