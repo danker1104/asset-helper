@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -22,9 +22,12 @@ async def test_openbanking_refresh_endpoint_rotates_when_close_to_expiry() -> No
         )
         expires_at = connect_response.json()["expires_at"]
 
+        expires_at_dt = datetime.fromisoformat(expires_at)
+        refresh_now = (expires_at_dt - timedelta(days=3)).isoformat()
+
         refresh_response = await client.post(
             "/openbanking/refresh",
-            json={"user_id": "demo", "now": "2026-07-08T00:00:00+00:00"},
+            json={"user_id": "demo", "now": refresh_now},
         )
 
         assert refresh_response.status_code == 200
