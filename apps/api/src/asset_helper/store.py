@@ -376,25 +376,66 @@ class InMemoryAvatarStore:
         stored_password = self._to_stored_password(user_id, password)
         try:
             with self._db_lock, sqlite3.connect(self._db_path) as db:
-                db.execute(
+                existing = db.execute(
                     """
-                    INSERT INTO accounts (
-                        user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    SELECT user_id, password
+                    FROM accounts
+                    WHERE user_id = ?
                     """,
-                    (
-                        user_id,
-                        stored_password,
-                        nickname,
-                        email,
-                        avatar_type,
-                        intensity,
-                        1 if text_mode else 0,
-                        daily_alert_cap,
-                        baseline_amount,
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+                    (user_id,),
+                ).fetchone()
+
+                if existing is not None:
+                    # Treat as duplicate only when both ID and password are exactly the same.
+                    existing_password = str(existing[1])
+                    if existing_password in {stored_password, password}:
+                        raise ValueError("duplicate_signup_fields")
+
+                    db.execute(
+                        """
+                        UPDATE accounts
+                        SET password = ?,
+                            nickname = ?,
+                            email = ?,
+                            avatar_type = ?,
+                            intensity = ?,
+                            text_mode = ?,
+                            daily_alert_cap = ?,
+                            baseline_amount = ?
+                        WHERE user_id = ?
+                        """,
+                        (
+                            stored_password,
+                            nickname,
+                            email,
+                            avatar_type,
+                            intensity,
+                            1 if text_mode else 0,
+                            daily_alert_cap,
+                            baseline_amount,
+                            user_id,
+                        ),
+                    )
+                else:
+                    db.execute(
+                        """
+                        INSERT INTO accounts (
+                            user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            stored_password,
+                            nickname,
+                            email,
+                            avatar_type,
+                            intensity,
+                            1 if text_mode else 0,
+                            daily_alert_cap,
+                            baseline_amount,
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
                 db.execute(
                     """
                     INSERT OR IGNORE INTO mission_stats (user_id, completed_count, updated_at)

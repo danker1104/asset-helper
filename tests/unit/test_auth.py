@@ -30,26 +30,25 @@ def test_login_rejects_unknown_user() -> None:
     assert raised is True
 
 
-def test_signup_rejects_duplicate_user_id_only() -> None:
+def test_signup_rejects_only_when_user_id_and_password_both_match() -> None:
     db_path = Path(gettempdir()) / f"asset-helper-auth-{uuid4().hex}.sqlite3"
     store = InMemoryAvatarStore(db_path=str(db_path))
     store.register_account(user_id="demo", password="pw-1234", nickname="데모", email="demo@example.com")
 
-    duplicate_user_id = False
-    duplicate_password = False
+    duplicate_exact_pair = False
 
     try:
-        store.register_account(user_id="demo", password="pw-9999", nickname="새닉", email="a@example.com")
+        store.register_account(user_id="demo", password="pw-1234", nickname="새닉", email="a@example.com")
     except ValueError as exc:
-        duplicate_user_id = str(exc) == "duplicate_signup_fields"
+        duplicate_exact_pair = str(exc) == "duplicate_signup_fields"
 
-    try:
-        store.register_account(user_id="new-user", password="pw-1234", nickname="새닉", email="b@example.com")
-    except ValueError as exc:
-        duplicate_password = str(exc) == "duplicate_signup_fields"
+    # Same ID with different password is allowed and updates account credentials.
+    updated_profile = store.register_account(user_id="demo", password="pw-9999", nickname="새닉", email="b@example.com")
+    session = store.login(user_id="demo", password="pw-9999")
 
-    assert duplicate_user_id is True
-    assert duplicate_password is False
+    assert duplicate_exact_pair is True
+    assert updated_profile.user_id == "demo"
+    assert session.user_id == "demo"
 
 
 def test_signup_persists_account_and_allows_login_after_store_restart() -> None:

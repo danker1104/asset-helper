@@ -30,7 +30,7 @@ async def test_login_returns_session_token_for_signed_up_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_signup_rejects_when_user_id_is_duplicate() -> None:
+async def test_signup_rejects_only_for_exact_same_user_id_and_password() -> None:
     db_path = Path(gettempdir()) / f"asset-helper-auth-{uuid4().hex}.sqlite3"
     app = create_app(store=InMemoryAvatarStore(db_path=str(db_path)))
     transport = httpx.ASGITransport(app=app)
@@ -42,17 +42,20 @@ async def test_signup_rejects_when_user_id_is_duplicate() -> None:
         )
         assert first.status_code == 200
 
-        duplicate_password = await client.post(
+        duplicate_exact_pair = await client.post(
             "/auth/signup",
-            json={"user_id": "another", "password": "pw-1234", "nickname": "새닉", "email": "another@example.com"},
+            json={"user_id": "demo", "password": "pw-1234", "nickname": "새닉", "email": "another@example.com"},
         )
-        duplicate_user_id = await client.post(
+        same_user_different_password = await client.post(
             "/auth/signup",
             json={"user_id": "demo", "password": "pw-9999", "nickname": "새닉2", "email": "another2@example.com"},
         )
-        assert duplicate_password.status_code == 200
 
-        assert duplicate_user_id.status_code == 409
-        body = duplicate_user_id.json()
+        assert duplicate_exact_pair.status_code == 409
+        body = duplicate_exact_pair.json()
         assert body["error"]["code"] == "duplicate_signup_fields"
         assert body["error"]["message"] == "일치합니다."
+        assert same_user_different_password.status_code == 200
+
+        login = await client.post("/auth/login", json={"user_id": "demo", "password": "pw-9999"})
+        assert login.status_code == 200
