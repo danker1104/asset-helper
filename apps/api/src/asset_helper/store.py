@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import os
+import base64
 import pickle
-import sqlite3
 import json
 from urllib import error as urlerror
 from urllib import request as urlrequest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
@@ -26,61 +25,26 @@ from .domain.models import AuditLog, AvatarState, MoneyEvent
 from .domain.profile import UserProfile, create_profile, update_profile_settings
 
 try:
-    from azure.core.exceptions import AzureError, ResourceExistsError
+    from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFoundError
     from azure.data.tables import TableClient, TableServiceClient
 except ImportError:  # pragma: no cover - optional dependency for local runs without Azure.
     AzureError = Exception
     ResourceExistsError = Exception
+    ResourceNotFoundError = Exception
     TableClient = None
     TableServiceClient = None
 
 
 class InMemoryAvatarStore:
     def __init__(self, db_path: str | None = None) -> None:
-        default_db_path = Path.cwd() / "asset-helper.sqlite3"
-        self._db_path = Path(db_path or os.environ.get("ASSET_HELPER_DB_PATH") or default_db_path)
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # `db_path` is intentionally ignored for backward compatibility with existing tests/callers.
+        _ = db_path
         self._db_lock = RLock()
-        with sqlite3.connect(self._db_path) as db:
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS store_snapshot (
-                    snapshot_id INTEGER PRIMARY KEY CHECK (snapshot_id = 1),
-                    payload BLOB NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS accounts (
-                    user_id TEXT PRIMARY KEY,
-                    password TEXT NOT NULL UNIQUE,
-                    nickname TEXT NOT NULL,
-                    email TEXT NOT NULL,
-                    avatar_type TEXT NOT NULL,
-                    intensity INTEGER NOT NULL,
-                    text_mode INTEGER NOT NULL,
-                    daily_alert_cap INTEGER NOT NULL,
-                    baseline_amount REAL NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS mission_stats (
-                    user_id TEXT PRIMARY KEY,
-                    completed_count INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES accounts(user_id)
-                )
-                """
-            )
-            db.commit()
-
         self._table_partition_key = os.environ.get("ASSET_HELPER_TABLE_PARTITION_KEY", "accounts")
-        self._table_client = self._init_table_client()
+        self._state_partition_key = os.environ.get("ASSET_HELPER_STATE_PARTITION_KEY", "state")
+        self._state_row_key = os.environ.get("ASSET_HELPER_STATE_ROW_KEY", "store")
+        self._account_table_client = self._init_table_client(os.environ.get("ASSET_HELPER_TABLE_NAME", "assethelperaccounts"))
+        self._state_table_client = self._init_table_client(os.environ.get("ASSET_HELPER_STATE_TABLE_NAME", "assethelperstate"))
 
         self._profiles: dict[str, UserProfile] = {}
         self._avatars: dict[str, AvatarState] = {}
@@ -96,6 +60,8 @@ class InMemoryAvatarStore:
         self._credentials: dict[str, UserCredential] = {}
         self._password_index: dict[str, str] = {}
         self._nickname_index: dict[str, str] = {}
+        self._mission_stats: dict[str, int] = {}
+        self._account_created_at: dict[str, str] = {}
         self._openbanking_connections: dict[str, OpenBankingConnection] = {}
         self._openbanking_poll_state: dict[str, OpenBankingPollState] = {}
         self._bankapi_links: dict[str, dict[str, str]] = {}
@@ -110,11 +76,9 @@ class InMemoryAvatarStore:
 
         self._load_snapshot()
         self._load_accounts_from_table()
-        self._load_accounts_from_db()
 
-    def _init_table_client(self):
+    def _init_table_client(self, table_name: str):
         connection_string = os.environ.get("ASSET_HELPER_TABLE_CONNECTION_STRING")
-        table_name = os.environ.get("ASSET_HELPER_TABLE_NAME", "assethelperaccounts")
         if not connection_string or TableServiceClient is None:
             return None
 
@@ -128,12 +92,49 @@ class InMemoryAvatarStore:
         except AzureError:
             return None
 
+    def _hydrate_account_entity(self, entity: dict[str, object]) -> None:
+        user_id = str(entity.get("RowKey", ""))
+        password = str(entity.get("password", ""))
+        nickname = str(entity.get("nickname", ""))
+        if not user_id or not password or not nickname:
+            return
+
+        self._credentials[user_id] = UserCredential(user_id=user_id, password=password, nickname=nickname)
+        self._password_index[password] = user_id
+        self._nickname_index[nickname] = user_id
+        self._mission_stats[user_id] = int(entity.get("completed_count", 0))
+        self._account_created_at[user_id] = str(entity.get("created_at", datetime.now(timezone.utc).isoformat()))
+        if user_id not in self._profiles:
+            self._profiles[user_id] = create_profile(
+                email=str(entity.get("email", "")),
+                user_id=user_id,
+                avatar_type=str(entity.get("avatar_type", "plant")),
+                intensity=int(entity.get("intensity", 1)),
+                text_mode=bool(entity.get("text_mode", False)),
+                daily_alert_cap=int(entity.get("daily_alert_cap", 3)),
+                baseline_amount=float(entity.get("baseline_amount", 30000.0)),
+            )
+
+    def _load_account_from_table(self, user_id: str) -> bool:
+        if self._account_table_client is None:
+            return False
+
+        try:
+            entity = self._account_table_client.get_entity(partition_key=self._table_partition_key, row_key=user_id)
+        except ResourceNotFoundError:
+            return False
+        except AzureError:
+            return False
+
+        self._hydrate_account_entity(entity)
+        return True
+
     def _load_accounts_from_table(self) -> None:
-        if self._table_client is None:
+        if self._account_table_client is None:
             return
 
         try:
-            entities = self._table_client.query_entities(
+            entities = self._account_table_client.query_entities(
                 query_filter="PartitionKey eq @partition",
                 parameters={"partition": self._table_partition_key},
             )
@@ -141,25 +142,7 @@ class InMemoryAvatarStore:
             return
 
         for entity in entities:
-            user_id = str(entity.get("RowKey", ""))
-            password = str(entity.get("password", ""))
-            nickname = str(entity.get("nickname", ""))
-            if not user_id or not password or not nickname:
-                continue
-
-            self._credentials[user_id] = UserCredential(user_id=user_id, password=password, nickname=nickname)
-            self._password_index[password] = user_id
-            self._nickname_index[nickname] = user_id
-            if user_id not in self._profiles:
-                self._profiles[user_id] = create_profile(
-                    email=str(entity.get("email", "")),
-                    user_id=user_id,
-                    avatar_type=str(entity.get("avatar_type", "plant")),
-                    intensity=int(entity.get("intensity", 1)),
-                    text_mode=bool(entity.get("text_mode", False)),
-                    daily_alert_cap=int(entity.get("daily_alert_cap", 3)),
-                    baseline_amount=float(entity.get("baseline_amount", 30000.0)),
-                )
+            self._hydrate_account_entity(entity)
 
     def _upsert_account_to_table(
         self,
@@ -173,8 +156,10 @@ class InMemoryAvatarStore:
         text_mode: bool,
         daily_alert_cap: int,
         baseline_amount: float,
+        created_at: str,
+        completed_count: int,
     ) -> None:
-        if self._table_client is None:
+        if self._account_table_client is None:
             return
 
         entity = {
@@ -188,10 +173,12 @@ class InMemoryAvatarStore:
             "text_mode": text_mode,
             "daily_alert_cap": daily_alert_cap,
             "baseline_amount": baseline_amount,
+            "created_at": created_at,
+            "completed_count": completed_count,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            self._table_client.upsert_entity(entity=entity, mode="Replace")
+            self._account_table_client.upsert_entity(entity=entity, mode="Replace")
         except AzureError:
             return
 
@@ -200,94 +187,32 @@ class InMemoryAvatarStore:
         # Keep plaintext model for MVP while avoiding cross-user UNIQUE collisions.
         return f"{user_id}::{password}"
 
-    def _load_accounts_from_db(self) -> None:
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            # Delete test accounts on each startup to keep DB clean
-            db.execute("DELETE FROM accounts WHERE user_id LIKE 'testuser%'")
-            db.commit()
-            
-            rows = db.execute(
-                """
-                SELECT user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount
-                FROM accounts
-                """
-            ).fetchall()
-
-            # Backfill relational account table from legacy snapshot data once.
-            if not rows and self._credentials:
-                for credential in self._credentials.values():
-                    profile = self._profiles.get(credential.user_id)
-                    if profile is None:
-                        continue
-                    db.execute(
-                        """
-                        INSERT OR IGNORE INTO accounts (
-                            user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            credential.user_id,
-                            credential.password,
-                            credential.nickname,
-                            profile.email,
-                            profile.avatar_type,
-                            profile.intensity,
-                            1 if profile.text_mode else 0,
-                            profile.daily_alert_cap,
-                            profile.baseline_amount,
-                            datetime.now(timezone.utc).isoformat(),
-                        ),
-                    )
-                db.commit()
-                rows = db.execute(
-                    """
-                    SELECT user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount
-                    FROM accounts
-                    """
-                ).fetchall()
-
-            for row in rows:
-                user_id = row[0]
-                db.execute(
-                    """
-                    INSERT OR IGNORE INTO mission_stats (user_id, completed_count, updated_at)
-                    VALUES (?, 0, ?)
-                    """,
-                    (user_id, datetime.now(timezone.utc).isoformat()),
-                )
-            db.commit()
-
-        self._credentials = {}
-        self._password_index = {}
-        for row in rows:
-            user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount = row
-            self._credentials[user_id] = UserCredential(user_id=user_id, password=password, nickname=nickname)
-            self._password_index[password] = user_id
-            self._nickname_index[nickname] = user_id
-            if user_id not in self._profiles:
-                self._profiles[user_id] = create_profile(
-                    email=email,
-                    user_id=user_id,
-                    avatar_type=avatar_type,
-                    intensity=intensity,
-                    text_mode=bool(text_mode),
-                    daily_alert_cap=daily_alert_cap,
-                    baseline_amount=baseline_amount,
-                )
-
     def _snapshot_state(self) -> bytes:
         # Session tokens are ephemeral runtime data; exclude them from persistence.
-        state = {key: value for key, value in self.__dict__.items() if key not in {"_db_path", "_db_lock", "_sessions"}}
+        state = {
+            key: value
+            for key, value in self.__dict__.items()
+            if key not in {"_db_lock", "_sessions", "_account_table_client", "_state_table_client"}
+        }
         return pickle.dumps(state)
 
     def _load_snapshot(self) -> None:
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            row = db.execute("SELECT payload FROM store_snapshot WHERE snapshot_id = 1").fetchone()
-        if row is None:
-            self._persist_snapshot()
+        if self._state_table_client is None:
             return
 
-        state = pickle.loads(row[0])
+        try:
+            entity = self._state_table_client.get_entity(partition_key=self._state_partition_key, row_key=self._state_row_key)
+        except ResourceNotFoundError:
+            self._persist_snapshot()
+            return
+        except AzureError:
+            return
+
+        payload_b64 = str(entity.get("payload", ""))
+        if not payload_b64:
+            return
+
+        state = pickle.loads(base64.b64decode(payload_b64.encode("ascii")))
         self.__dict__.update(state)
         
         # Clean up test accounts on each startup
@@ -305,6 +230,8 @@ class InMemoryAvatarStore:
                 self._nickname_index.pop(cred.nickname, None)
             self._credentials.pop(user_id, None)
             self._profiles.pop(user_id, None)
+            self._mission_stats.pop(user_id, None)
+            self._account_created_at.pop(user_id, None)
             self._bankapi_links.pop(user_id, None)
             self._bankapi_balance_history.pop(user_id, None)
             self._bankapi_transaction_history.pop(user_id, None)
@@ -319,19 +246,21 @@ class InMemoryAvatarStore:
             self._thresholds.pop(user_id, None)
 
     def _persist_snapshot(self) -> None:
+        if self._state_table_client is None:
+            return
+
         payload = self._snapshot_state()
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            db.execute(
-                """
-                INSERT INTO store_snapshot (snapshot_id, payload, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(snapshot_id) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                (payload, datetime.now(timezone.utc).isoformat()),
-            )
-            db.commit()
+        payload_b64 = base64.b64encode(payload).decode("ascii")
+        entity = {
+            "PartitionKey": self._state_partition_key,
+            "RowKey": self._state_row_key,
+            "payload": payload_b64,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self._state_table_client.upsert_entity(entity=entity, mode="Replace")
+        except AzureError:
+            return
 
     def create_profile(
         self,
@@ -374,78 +303,29 @@ class InMemoryAvatarStore:
         baseline_amount: float = 30000.0,
     ) -> UserProfile:
         stored_password = self._to_stored_password(user_id, password)
-        try:
-            with self._db_lock, sqlite3.connect(self._db_path) as db:
-                existing = db.execute(
-                    """
-                    SELECT user_id, password
-                    FROM accounts
-                    WHERE user_id = ?
-                    """,
-                    (user_id,),
-                ).fetchone()
+        with self._db_lock:
+            existing_credential = self._credentials.get(user_id)
+            if existing_credential is None:
+                self._load_account_from_table(user_id)
+                existing_credential = self._credentials.get(user_id)
 
-                if existing is not None:
-                    # Treat as duplicate only when both ID and password are exactly the same.
-                    existing_password = str(existing[1])
-                    if existing_password in {stored_password, password}:
-                        raise ValueError("duplicate_signup_fields")
+            if existing_credential is not None and existing_credential.password in {stored_password, password}:
+                raise ValueError("duplicate_signup_fields")
 
-                    db.execute(
-                        """
-                        UPDATE accounts
-                        SET password = ?,
-                            nickname = ?,
-                            email = ?,
-                            avatar_type = ?,
-                            intensity = ?,
-                            text_mode = ?,
-                            daily_alert_cap = ?,
-                            baseline_amount = ?
-                        WHERE user_id = ?
-                        """,
-                        (
-                            stored_password,
-                            nickname,
-                            email,
-                            avatar_type,
-                            intensity,
-                            1 if text_mode else 0,
-                            daily_alert_cap,
-                            baseline_amount,
-                            user_id,
-                        ),
-                    )
-                else:
-                    db.execute(
-                        """
-                        INSERT INTO accounts (
-                            user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            user_id,
-                            stored_password,
-                            nickname,
-                            email,
-                            avatar_type,
-                            intensity,
-                            1 if text_mode else 0,
-                            daily_alert_cap,
-                            baseline_amount,
-                            datetime.now(timezone.utc).isoformat(),
-                        ),
-                    )
-                db.execute(
-                    """
-                    INSERT OR IGNORE INTO mission_stats (user_id, completed_count, updated_at)
-                    VALUES (?, 0, ?)
-                    """,
-                    (user_id, datetime.now(timezone.utc).isoformat()),
-                )
-                db.commit()
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("duplicate_signup_fields") from exc
+            old_credential = self._credentials.get(user_id)
+            if old_credential is not None:
+                self._password_index.pop(old_credential.password, None)
+                self._nickname_index.pop(old_credential.nickname, None)
+
+            created_at = self._account_created_at.get(user_id, datetime.now(timezone.utc).isoformat())
+            completed_count = self._mission_stats.get(user_id, 0)
+
+            credential = UserCredential(user_id=user_id, password=stored_password, nickname=nickname)
+            self._credentials[user_id] = credential
+            self._password_index[stored_password] = user_id
+            self._nickname_index[nickname] = user_id
+            self._account_created_at[user_id] = created_at
+            self._mission_stats[user_id] = completed_count
 
         profile = self.create_profile(
             email=email,
@@ -457,10 +337,6 @@ class InMemoryAvatarStore:
             baseline_amount=baseline_amount,
         )
 
-        credential = UserCredential(user_id=user_id, password=password, nickname=nickname)
-        self._credentials[user_id] = credential
-        self._password_index[stored_password] = user_id
-        self._nickname_index[nickname] = user_id
         self._upsert_account_to_table(
             user_id=user_id,
             password=stored_password,
@@ -471,6 +347,8 @@ class InMemoryAvatarStore:
             text_mode=text_mode,
             daily_alert_cap=daily_alert_cap,
             baseline_amount=baseline_amount,
+            created_at=self._account_created_at[user_id],
+            completed_count=self._mission_stats.get(user_id, 0),
         )
         self._persist_snapshot()
         return profile
@@ -487,68 +365,26 @@ class InMemoryAvatarStore:
         if password is None and email is None:
             raise ValueError("invalid_credentials")
 
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            if password is not None:
-                stored_password = self._to_stored_password(user_id, password)
-                row = db.execute(
-                    """
-                    SELECT user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount
-                    FROM accounts
-                    WHERE user_id = ? AND password = ?
-                    """,
-                    (user_id, stored_password),
-                ).fetchone()
-                if row is None:
-                    # Backward compatibility for already-created legacy accounts.
-                    row = db.execute(
-                        """
-                        SELECT user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount
-                        FROM accounts
-                        WHERE user_id = ? AND password = ?
-                        """,
-                        (user_id, password),
-                    ).fetchone()
-            else:
-                row = db.execute(
-                    """
-                    SELECT user_id, password, nickname, email, avatar_type, intensity, text_mode, daily_alert_cap, baseline_amount
-                    FROM accounts
-                    WHERE user_id = ? AND email = ?
-                    """,
-                    (user_id, email),
-                ).fetchone()
+        credential = self._credentials.get(user_id)
+        if credential is None:
+            self._load_account_from_table(user_id)
+            credential = self._credentials.get(user_id)
 
-        if row is None:
+        if credential is None:
             raise ValueError("invalid_credentials")
 
-        (
-            db_user_id,
-            db_password,
-            db_nickname,
-            db_email,
-            db_avatar_type,
-            db_intensity,
-            db_text_mode,
-            db_daily_alert_cap,
-            db_baseline_amount,
-        ) = row
+        profile = self._profiles.get(user_id)
+        if profile is None:
+            raise ValueError("invalid_credentials")
 
-        # Keep in-memory mirrors synced so downstream features don't fail after successful login.
-        self._credentials[db_user_id] = UserCredential(user_id=db_user_id, password=db_password, nickname=db_nickname)
-        self._password_index[db_password] = db_user_id
-        self._nickname_index[db_nickname] = db_user_id
-        if db_user_id not in self._profiles:
-            self._profiles[db_user_id] = create_profile(
-                email=db_email,
-                user_id=db_user_id,
-                avatar_type=db_avatar_type,
-                intensity=db_intensity,
-                text_mode=bool(db_text_mode),
-                daily_alert_cap=db_daily_alert_cap,
-                baseline_amount=db_baseline_amount,
-            )
+        if password is not None:
+            stored_password = self._to_stored_password(user_id, password)
+            if credential.password not in {stored_password, password}:
+                raise ValueError("invalid_credentials")
+        elif profile.email != email:
+            raise ValueError("invalid_credentials")
 
-        session = AuthSession(user_id=db_user_id, nickname=db_nickname, email=db_email, session_token=uuid4().hex)
+        session = AuthSession(user_id=user_id, nickname=credential.nickname, email=profile.email, session_token=uuid4().hex)
         self._sessions[session.session_token] = session
         self._persist_snapshot()
         return session
@@ -1278,54 +1114,50 @@ class InMemoryAvatarStore:
         return card_id in self._learning_progress.get(user_id, set())
 
     def complete_mission(self, user_id: str) -> int:
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            account_row = db.execute("SELECT user_id FROM accounts WHERE user_id = ?", (user_id,)).fetchone()
-            if account_row is None:
-                raise ValueError("user_not_found")
+        if user_id not in self._credentials and not self._load_account_from_table(user_id):
+            raise ValueError("user_not_found")
 
-            cursor = db.execute(
-                """
-                UPDATE mission_stats
-                SET completed_count = completed_count + 1,
-                    updated_at = ?
-                WHERE user_id = ?
-                """,
-                (datetime.now(timezone.utc).isoformat(), user_id),
-            )
-            if cursor.rowcount == 0:
-                db.execute(
-                    """
-                    INSERT INTO mission_stats (user_id, completed_count, updated_at)
-                    VALUES (?, 1, ?)
-                    """,
-                    (user_id, datetime.now(timezone.utc).isoformat()),
-                )
+        completed_count = self._mission_stats.get(user_id, 0) + 1
+        self._mission_stats[user_id] = completed_count
 
-            row = db.execute(
-                "SELECT completed_count FROM mission_stats WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-            db.commit()
-
-        return int(row[0]) if row is not None else 0
+        credential = self._credentials[user_id]
+        profile = self._profiles.get(user_id) or create_profile(email="", user_id=user_id)
+        self._profiles[user_id] = profile
+        created_at = self._account_created_at.get(user_id, datetime.now(timezone.utc).isoformat())
+        self._account_created_at[user_id] = created_at
+        self._upsert_account_to_table(
+            user_id=user_id,
+            password=credential.password,
+            nickname=credential.nickname,
+            email=profile.email,
+            avatar_type=profile.avatar_type,
+            intensity=profile.intensity,
+            text_mode=profile.text_mode,
+            daily_alert_cap=profile.daily_alert_cap,
+            baseline_amount=profile.baseline_amount,
+            created_at=created_at,
+            completed_count=completed_count,
+        )
+        self._persist_snapshot()
+        return completed_count
 
     def list_mission_ranking(self, limit: int = 50) -> list[dict[str, object]]:
         safe_limit = max(1, min(200, limit))
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            rows = db.execute(
-                """
-                SELECT a.user_id, a.nickname, COALESCE(m.completed_count, 0) AS completed_count
-                FROM accounts a
-                LEFT JOIN mission_stats m ON m.user_id = a.user_id
-                ORDER BY completed_count DESC, a.created_at ASC, a.user_id ASC
-                LIMIT ?
-                """,
-                (safe_limit,),
-            ).fetchall()
+        rows: list[tuple[str, str, int, str]] = []
+        for user_id, credential in self._credentials.items():
+            rows.append(
+                (
+                    user_id,
+                    credential.nickname,
+                    int(self._mission_stats.get(user_id, 0)),
+                    self._account_created_at.get(user_id, ""),
+                )
+            )
+        rows.sort(key=lambda item: (-item[2], item[3], item[0]))
 
         items: list[dict[str, object]] = []
-        for index, row in enumerate(rows):
-            user_id, nickname, completed_count = row
+        for index, row in enumerate(rows[:safe_limit]):
+            user_id, nickname, completed_count, _created_at = row
             items.append(
                 {
                     "rank": index + 1,
@@ -1337,52 +1169,19 @@ class InMemoryAvatarStore:
         return items
 
     def get_mission_rank(self, user_id: str) -> dict[str, object]:
-        with self._db_lock, sqlite3.connect(self._db_path) as db:
-            row = db.execute(
-                """
-                WITH base AS (
-                    SELECT
-                        a.user_id,
-                        a.nickname,
-                        a.created_at,
-                        COALESCE(m.completed_count, 0) AS completed_count
-                    FROM accounts a
-                    LEFT JOIN mission_stats m ON m.user_id = a.user_id
-                )
-                SELECT
-                    b.user_id,
-                    b.nickname,
-                    b.completed_count,
-                    (
-                        1 + (
-                            SELECT COUNT(*)
-                            FROM base other
-                            WHERE
-                                other.completed_count > b.completed_count
-                                OR (
-                                    other.completed_count = b.completed_count
-                                    AND (
-                                        other.created_at < b.created_at
-                                        OR (other.created_at = b.created_at AND other.user_id < b.user_id)
-                                    )
-                                )
-                        )
-                    ) AS rank
-                FROM base b
-                WHERE b.user_id = ?
-                """,
-                (user_id,),
-            ).fetchone()
-
-        if row is None:
+        if user_id not in self._credentials and not self._load_account_from_table(user_id):
             raise ValueError("user_not_found")
 
-        rank_user_id, nickname, completed_count, rank = row
+        ranking = self.list_mission_ranking(limit=20000)
+        target = next((item for item in ranking if str(item["user_id"]) == user_id), None)
+        if target is None:
+            raise ValueError("user_not_found")
+
         return {
-            "rank": int(rank),
-            "user_id": str(rank_user_id),
-            "nickname": str(nickname),
-            "completed_count": int(completed_count),
+            "rank": int(target["rank"]),
+            "user_id": str(target["user_id"]),
+            "nickname": str(target["nickname"]),
+            "completed_count": int(target["completed_count"]),
         }
 
     def create_group(self, name: str, max_members: int = 6) -> Group:

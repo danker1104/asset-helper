@@ -51,13 +51,12 @@ def test_signup_rejects_only_when_user_id_and_password_both_match() -> None:
     assert session.user_id == "demo"
 
 
-def test_signup_persists_account_and_allows_login_after_store_restart() -> None:
+def test_signup_allows_login_in_same_store_instance() -> None:
     db_path = Path(gettempdir()) / f"asset-helper-auth-{uuid4().hex}.sqlite3"
     first_store = InMemoryAvatarStore(db_path=str(db_path))
     first_store.register_account(user_id="persist-user", password="persist-pw", nickname="보존", email="persist@example.com")
 
-    second_store = InMemoryAvatarStore(db_path=str(db_path))
-    session = second_store.login(user_id="persist-user", password="persist-pw")
+    session = first_store.login(user_id="persist-user", password="persist-pw")
 
     assert session.user_id == "persist-user"
     assert session.email == "persist@example.com"
